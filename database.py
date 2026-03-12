@@ -3,6 +3,7 @@ import sqlite3
 import threading
 import os
 import logging
+from pathlib import PurePosixPath, PureWindowsPath
 
 log = logging.getLogger(__name__)
 
@@ -10,7 +11,7 @@ _local = threading.local()
 _db_path = None
 _lock = threading.Lock()
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS config (
@@ -156,6 +157,79 @@ CREATE TRIGGER IF NOT EXISTS tracks_au AFTER UPDATE ON tracks BEGIN
         COALESCE(new.composer, '')
     );
 END;
+
+-- Podcasts
+CREATE TABLE IF NOT EXISTS podcasts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    title TEXT NOT NULL,
+    author TEXT,
+    description TEXT,
+    feed_url TEXT UNIQUE,
+    image_url TEXT,
+    image_data BLOB,
+    link TEXT,
+    category TEXT,
+    language TEXT,
+    last_checked TIMESTAMP,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_podcasts_title ON podcasts(title);
+
+CREATE TABLE IF NOT EXISTS podcast_episodes (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    podcast_id INTEGER NOT NULL REFERENCES podcasts(id) ON DELETE CASCADE,
+    title TEXT NOT NULL,
+    description TEXT,
+    guid TEXT,
+    published_at TIMESTAMP,
+    duration_ms INTEGER DEFAULT 0,
+    file_url TEXT,
+    file_path TEXT,
+    file_size INTEGER DEFAULT 0,
+    file_format TEXT,
+    episode_type TEXT,
+    listened INTEGER DEFAULT 0,
+    listened_at TIMESTAMP,
+    downloaded INTEGER DEFAULT 0,
+    downloaded_at TIMESTAMP,
+    position_ms INTEGER DEFAULT 0,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(podcast_id, guid)
+);
+CREATE INDEX IF NOT EXISTS idx_episodes_podcast ON podcast_episodes(podcast_id);
+CREATE INDEX IF NOT EXISTS idx_episodes_date ON podcast_episodes(published_at);
+
+-- Full-text search for podcast episodes
+CREATE VIRTUAL TABLE IF NOT EXISTS episodes_fts USING fts5(
+    title, podcast_title, description,
+    content=podcast_episodes,
+    content_rowid=id,
+    tokenize='unicode61 remove_diacritics 2'
+);
+
+-- Harmonization log (track changes for undo)
+CREATE TABLE IF NOT EXISTS harmonization_log (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    table_name TEXT NOT NULL,
+    record_id INTEGER NOT NULL,
+    field_name TEXT NOT NULL,
+    old_value TEXT,
+    new_value TEXT,
+    applied_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_harm_log_table ON harmonization_log(table_name, record_id);
+
+-- CD rip history
+CREATE TABLE IF NOT EXISTS cd_rip_history (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    disc_id TEXT,
+    album_title TEXT,
+    artist TEXT,
+    track_count INTEGER,
+    output_dir TEXT,
+    ripped_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
 """
 
 
@@ -319,4 +393,181 @@ def get_library_stats():
     stats['total_size'] = row['s'] or 0 if row else 0
     row = fetchone("SELECT COUNT(*) as c FROM playlists")
     stats['playlists'] = row['c'] if row else 0
+    row = fetchone("SELECT COUNT(*) as c FROM podcasts")
+    stats['podcasts'] = row['c'] if row else 0
+    row = fetchone("SELECT COUNT(*) as c FROM podcast_episodes")
+    stats['episodes'] = row['c'] if row else 0
+    row = fetchone("SELECT COUNT(*) as c FROM podcast_episodes WHERE file_path IS NOT NULL")
+    stats['episodes_downloaded'] = row['c'] if row else 0
     return stats
+
+
+def get_or_create_podcast(title, feed_url=None, author=None):
+    """Get podcast ID by title, create if not exists."""
+    if feed_url:
+        row = fetchone("SELECT id FROM podcasts WHERE feed_url = ?", (feed_url,))
+        if row:
+            return row['id']
+    row = fetchone("SELECT id FROM podcasts WHERE title = ?", (title,))
+    if row:
+        return row['id']
+    execute(
+        "INSERT INTO podcasts(title, feed_url, author) VALUES(?, ?, ?)",
+        (title, feed_url, author), commit=True
+    )
+    return fetchone("SELECT last_insert_rowid() as id")['id']
+
+
+def search_episodes(query, limit=200):
+    """Full-text search on podcast episodes."""
+    if not query or len(query.strip()) < 2:
+        return []
+    safe_q = query.replace('"', '""').strip()
+    try:
+        return fetchall("""
+            SELECT e.*, p.title as podcast_title, p.image_data
+            FROM episodes_fts fts
+            JOIN podcast_episodes e ON e.id = fts.rowid
+            LEFT JOIN podcasts p ON e.podcast_id = p.id
+            WHERE episodes_fts MATCH ?
+            ORDER BY rank LIMIT ?
+        """, (f'"{safe_q}"*', limit))
+    except Exception:
+        like = f"%{query}%"
+        return fetchall("""
+            SELECT e.*, p.title as podcast_title, p.image_data
+            FROM podcast_episodes e
+            LEFT JOIN podcasts p ON e.podcast_id = p.id
+            WHERE e.title LIKE ? OR p.title LIKE ?
+            ORDER BY e.published_at DESC LIMIT ?
+        """, (like, like, limit))
+
+
+# --- Path relocation ---
+
+def relocate_paths(old_prefix, new_prefix):
+    """Relocate all file paths matching old_prefix to new_prefix.
+
+    Useful when music library moves (e.g., Windows→Linux, drive letter change).
+    Uses parameterized queries for safety.
+    Returns count of updated rows.
+    """
+    # Normalize separators
+    old_prefix = old_prefix.replace('\\', '/')
+    new_prefix = new_prefix.replace('\\', '/')
+
+    # Update tracks
+    rows = fetchall(
+        "SELECT id, file_path FROM tracks WHERE file_path LIKE ?",
+        (old_prefix.replace('/', '%').replace('\\', '%')[:3] + '%',)
+    )
+    count = 0
+    for row in rows:
+        fp = row['file_path'].replace('\\', '/')
+        if fp.startswith(old_prefix):
+            new_path = new_prefix + fp[len(old_prefix):]
+            # Convert back to OS-native separators
+            new_path = os.path.normpath(new_path)
+            execute(
+                "UPDATE tracks SET file_path = ? WHERE id = ?",
+                (new_path, row['id']), commit=False
+            )
+            count += 1
+
+    # Update albums folder_path
+    album_rows = fetchall(
+        "SELECT id, folder_path FROM albums WHERE folder_path IS NOT NULL"
+    )
+    for row in album_rows:
+        fp = (row['folder_path'] or '').replace('\\', '/')
+        if fp.startswith(old_prefix):
+            new_path = new_prefix + fp[len(old_prefix):]
+            new_path = os.path.normpath(new_path)
+            execute(
+                "UPDATE albums SET folder_path = ? WHERE id = ?",
+                (new_path, row['id']), commit=False
+            )
+
+    # Update scan_folders
+    folder_rows = fetchall("SELECT id, path FROM scan_folders")
+    for row in folder_rows:
+        fp = (row['path'] or '').replace('\\', '/')
+        if fp.startswith(old_prefix):
+            new_path = new_prefix + fp[len(old_prefix):]
+            new_path = os.path.normpath(new_path)
+            execute(
+                "UPDATE scan_folders SET path = ? WHERE id = ?",
+                (new_path, row['id']), commit=False
+            )
+
+    if count:
+        commit()
+    log.info("Relocated %d track paths: %s -> %s", count, old_prefix, new_prefix)
+    return count
+
+
+def find_broken_paths():
+    """Find tracks whose files no longer exist on disk."""
+    broken = []
+    rows = fetchall("SELECT id, file_path, title FROM tracks")
+    for row in rows:
+        if not os.path.exists(row['file_path']):
+            broken.append({
+                'id': row['id'],
+                'file_path': row['file_path'],
+                'title': row['title'],
+            })
+    return broken
+
+
+def export_library(output_path):
+    """Export library metadata to JSON for portability."""
+    import json
+    data = {
+        'tracks': [],
+        'playlists': [],
+        'scan_folders': [],
+    }
+
+    tracks = fetchall("""
+        SELECT t.*, a.name as artist_name, al.title as album_title
+        FROM tracks t
+        LEFT JOIN artists a ON t.artist_id = a.id
+        LEFT JOIN albums al ON t.album_id = al.id
+        ORDER BY t.id
+    """)
+    for t in tracks:
+        data['tracks'].append({
+            'title': t['title'],
+            'artist': t['artist_name'],
+            'album': t['album_title'],
+            'file_path': t['file_path'],
+            'track_number': t['track_number'],
+            'disc_number': t['disc_number'],
+            'genre': t['genre'],
+            'year': t['year'],
+            'play_count': t['play_count'],
+            'rating': t['rating'],
+        })
+
+    playlists = fetchall("SELECT * FROM playlists ORDER BY name")
+    for pl in playlists:
+        pl_tracks = fetchall(
+            "SELECT t.file_path FROM playlist_tracks pt "
+            "JOIN tracks t ON pt.track_id = t.id "
+            "WHERE pt.playlist_id = ? ORDER BY pt.position",
+            (pl['id'],)
+        )
+        data['playlists'].append({
+            'name': pl['name'],
+            'source': pl['source'],
+            'tracks': [t['file_path'] for t in pl_tracks],
+        })
+
+    folders = fetchall("SELECT path FROM scan_folders")
+    data['scan_folders'] = [f['path'] for f in folders]
+
+    with open(output_path, 'w', encoding='utf-8') as f:
+        json.dump(data, f, indent=2, ensure_ascii=False)
+    log.info("Library exported to %s (%d tracks)", output_path, len(data['tracks']))
+    return len(data['tracks'])

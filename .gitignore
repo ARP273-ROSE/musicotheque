@@ -19,3 +19,6 @@ CLAUDE.md
 _crash_report.json
 _error.log
 .env
+*.ps1
+transfer.bat
+transfer_log.txt

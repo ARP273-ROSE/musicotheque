@@ -51,9 +51,21 @@ def parse_itunes_xml(xml_path):
         except (ValueError, TypeError):
             continue
 
-        # Skip non-audio (movies, podcasts, etc.)
+        # Skip podcasts (Podcast=True key or Genre=Podcast)
+        if info.get('Podcast'):
+            continue
+        if (info.get('Genre') or '').lower() == 'podcast':
+            continue
+
+        # Skip non-audio (movies, streams, etc.) — handles localized Kind (e.g. French "vidéo")
         kind = info.get('Kind', '')
-        if any(x in kind.lower() for x in ['video', 'movie', 'pdf', 'book']):
+        kind_lower = kind.lower()
+        if any(x in kind_lower for x in ['video', 'vidéo', 'movie', 'pdf', 'book', 'flux', 'stream']):
+            continue
+
+        # Skip URL-based entries (no local file)
+        track_type = info.get('Track Type', '')
+        if track_type == 'URL':
             continue
 
         location = parse_itunes_location(info.get('Location', ''))
@@ -283,4 +295,146 @@ class ITunesImportWorker(QObject):
 
         except Exception as e:
             log.exception("iTunes import error")
+            self.error.emit(str(e))
+
+
+def parse_itunes_podcasts(xml_path):
+    """Parse podcast entries from iTunes Library XML.
+
+    Returns:
+        podcasts: dict of show_name -> {episodes: [{name, artist, location, duration_ms, ...}]}
+    """
+    log.info("Parsing iTunes podcasts from: %s", xml_path)
+
+    with open(xml_path, 'rb') as f:
+        plist = plistlib.load(f)
+
+    raw_tracks = plist.get('Tracks', {})
+    shows = {}
+
+    for track_id_str, info in raw_tracks.items():
+        # Only podcasts
+        is_podcast = info.get('Podcast') or (info.get('Genre') or '').lower() == 'podcast'
+        if not is_podcast:
+            continue
+
+        # Skip URL-only entries (RSS feeds, no file)
+        track_type = info.get('Track Type', '')
+        if track_type == 'URL':
+            continue
+
+        location = parse_itunes_location(info.get('Location', ''))
+        if not location:
+            continue
+
+        show_name = info.get('Album', info.get('Artist', 'Unknown Podcast'))
+        if show_name not in shows:
+            shows[show_name] = {
+                'title': show_name,
+                'author': info.get('Artist', ''),
+                'genre': info.get('Genre', 'Podcast'),
+                'episodes': [],
+            }
+
+        shows[show_name]['episodes'].append({
+            'title': info.get('Name', ''),
+            'artist': info.get('Artist', ''),
+            'location': location,
+            'duration_ms': info.get('Total Time', 0),
+            'file_size': info.get('Size', 0),
+            'play_count': info.get('Play Count', 0),
+            'date_added': info.get('Date Added'),
+        })
+
+    log.info("Parsed %d podcast shows, %d episodes",
+             len(shows), sum(len(s['episodes']) for s in shows.values()))
+    return shows
+
+
+class ITunesPodcastImportWorker(QObject):
+    """Worker that imports iTunes podcasts into the database."""
+    progress = pyqtSignal(int, int, str)
+    finished = pyqtSignal(int, int)  # shows_imported, episodes_imported
+    error = pyqtSignal(str)
+
+    def __init__(self, xml_path, remap_paths=None):
+        super().__init__()
+        self._xml_path = xml_path
+        self._remap_paths = remap_paths or {}
+        self._cancelled = False
+
+    def cancel(self):
+        self._cancelled = True
+
+    def _remap_path(self, path):
+        if not path:
+            return path
+        for old, new in self._remap_paths.items():
+            if path.startswith(old):
+                return path.replace(old, new, 1)
+        return path
+
+    def run(self):
+        try:
+            shows = parse_itunes_podcasts(self._xml_path)
+            total = sum(len(s['episodes']) for s in shows.values())
+            imported_shows = 0
+            imported_episodes = 0
+            current = 0
+
+            for show_name, show_data in shows.items():
+                if self._cancelled:
+                    break
+
+                # Get or create podcast
+                podcast_id = db.get_or_create_podcast(
+                    show_data['title'],
+                    author=show_data['author']
+                )
+                imported_shows += 1
+
+                for ep in show_data['episodes']:
+                    if self._cancelled:
+                        break
+
+                    current += 1
+                    self.progress.emit(current, total, ep.get('title', ''))
+
+                    location = self._remap_path(ep['location'])
+                    if not location:
+                        continue
+
+                    norm_path = os.path.normpath(location)
+                    ext = Path(location).suffix.lstrip('.').upper()
+
+                    # Check if already imported
+                    existing = db.fetchone(
+                        "SELECT id FROM podcast_episodes WHERE podcast_id = ? AND file_path = ?",
+                        (podcast_id, norm_path)
+                    )
+                    if existing:
+                        continue
+
+                    db.execute("""
+                        INSERT OR IGNORE INTO podcast_episodes(
+                            podcast_id, title, file_path, file_size,
+                            file_format, duration_ms, guid
+                        ) VALUES(?, ?, ?, ?, ?, ?, ?)
+                    """, (
+                        podcast_id, ep['title'], norm_path,
+                        ep['file_size'], ext, ep['duration_ms'],
+                        norm_path  # Use path as guid for local files
+                    ), commit=False)
+                    imported_episodes += 1
+
+                    if imported_episodes % 100 == 0:
+                        db.commit()
+
+            db.commit()
+            log.info("iTunes podcast import: %d shows, %d episodes",
+                     imported_shows, imported_episodes)
+            self.finished.emit(imported_shows, imported_episodes)
+
+        except Exception as e:
+            log.exception("iTunes podcast import error")
             self.error.emit(str(e))

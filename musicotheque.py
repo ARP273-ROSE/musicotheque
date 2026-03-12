@@ -12,17 +12,33 @@ import traceback
 import time
 from pathlib import Path
 
-VERSION = '1.0.0'
+VERSION = '2.0.0'
 APP_NAME = 'MusicOthèque'
 APP_DIR = Path(__file__).parent
-DATA_DIR = Path(os.environ.get('APPDATA', Path.home())) / 'MusicOtheque'
+
+
+def _get_data_dir():
+    """Cross-platform data directory."""
+    system = platform.system()
+    if system == 'Windows':
+        base = Path(os.environ.get('APPDATA', str(Path.home())))
+    elif system == 'Darwin':
+        base = Path.home() / 'Library' / 'Application Support'
+    else:
+        base = Path(os.environ.get('XDG_DATA_HOME', str(Path.home() / '.local' / 'share')))
+    return base / 'MusicOtheque'
+
+
+DATA_DIR = _get_data_dir()
 DB_PATH = DATA_DIR / 'musicotheque.db'
+BACKUP_DIR = DATA_DIR / 'backups'
 LOG_PATH = DATA_DIR / 'musicotheque.log'
 CRASH_PATH = DATA_DIR / '_crash_report.json'
 ERROR_LOG = DATA_DIR / '_error.log'
 
-# Ensure data dir exists
+# Ensure dirs exist
 DATA_DIR.mkdir(parents=True, exist_ok=True)
+BACKUP_DIR.mkdir(parents=True, exist_ok=True)
 
 
 def setup_logging():
@@ -324,6 +340,10 @@ def main():
 
     # Check for updates (background)
     check_for_updates()
+
+    # Auto-backup database at startup
+    from backup_manager import backup_database
+    backup_database(str(DB_PATH), str(BACKUP_DIR))
 
     # Create main window
     from main_window import MainWindow
