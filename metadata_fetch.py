@@ -1,5 +1,6 @@
 """Online metadata fetcher using MusicBrainz API."""
 import logging
+import re
 import time
 
 from pathlib import Path
@@ -112,11 +113,19 @@ def search_recording(title, artist='', album='', limit=5):
     return results
 
 
+_MBID_RE = re.compile(r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$')
+
+
 def fetch_cover_art(mbid_release):
     """Fetch cover art from Cover Art Archive."""
     import requests
 
     if not mbid_release:
+        return None
+
+    # Validate MBID format (UUID) to prevent URL injection
+    if not _MBID_RE.match(mbid_release):
+        log.warning("Invalid MBID format: %s", mbid_release)
         return None
 
     try:

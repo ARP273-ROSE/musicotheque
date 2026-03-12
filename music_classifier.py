@@ -354,6 +354,9 @@ COMPOSER_PERIODS = {
     'Tavener': ('Contemporary', 1944, 2013),
 }
 
+# Pre-built lowercase lookup map for O(1) case-insensitive matching
+_COMPOSER_LOWER_MAP = {name.lower(): data for name, data in COMPOSER_PERIODS.items()}
+
 # Period definitions (for year-based classification)
 PERIODS = [
     ('Medieval', None, 1400),
@@ -606,16 +609,13 @@ def detect_period(composer='', year=None):
         # Try exact match first
         entry = COMPOSER_PERIODS.get(composer)
         if not entry:
-            # Try case-insensitive partial match
+            # Try case-insensitive exact match (O(1) via pre-built lookup)
             composer_lower = composer.lower().strip()
-            for name, data in COMPOSER_PERIODS.items():
-                if name.lower() == composer_lower:
-                    entry = data
-                    break
+            entry = _COMPOSER_LOWER_MAP.get(composer_lower)
             if not entry:
-                # Try if composer name contains a known name
-                for name, data in COMPOSER_PERIODS.items():
-                    if name.lower() in composer_lower or composer_lower in name.lower():
+                # Try partial match (substring containment)
+                for name_lower, data in _COMPOSER_LOWER_MAP.items():
+                    if name_lower in composer_lower or composer_lower in name_lower:
                         entry = data
                         break
         if entry:

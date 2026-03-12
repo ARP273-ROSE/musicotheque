@@ -510,7 +510,9 @@ def _get_toc_mci_windows(drive: str) -> dict | None:
                 raise RuntimeError(f"MCI error {err}: {err_buf.value}")
             return buf.value
 
-        drive_letter = drive.rstrip(':\\/')
+        # Validate drive path before MCI commands
+        validated = _validate_drive_path(drive)
+        drive_letter = validated.rstrip(':')
         alias = 'cdripdev'
 
         # Open cdaudio device

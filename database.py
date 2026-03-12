@@ -318,7 +318,7 @@ def search_tracks(query, limit=200):
     # Escape FTS special chars
     safe_q = query.replace('"', '""').strip()
     sql = """
-        SELECT t.*, a.name as artist_name, al.title as album_title, al.cover_data
+        SELECT t.*, a.name as artist_name, al.title as album_title, al.id as _album_id
         FROM tracks_fts fts
         JOIN tracks t ON t.id = fts.rowid
         LEFT JOIN artists a ON t.artist_id = a.id
@@ -334,7 +334,7 @@ def search_tracks(query, limit=200):
         escaped = query.replace('\\', '\\\\').replace('%', '\\%').replace('_', '\\_')
         like = f"%{escaped}%"
         return fetchall("""
-            SELECT t.*, a.name as artist_name, al.title as album_title, al.cover_data
+            SELECT t.*, a.name as artist_name, al.title as album_title, al.id as _album_id
             FROM tracks t
             LEFT JOIN artists a ON t.artist_id = a.id
             LEFT JOIN albums al ON t.album_id = al.id
@@ -510,16 +510,25 @@ def relocate_paths(old_prefix, new_prefix):
 
 
 def find_broken_paths():
-    """Find tracks whose files no longer exist on disk."""
-    broken = []
+    """Find tracks whose files no longer exist on disk.
+
+    Uses parallel file existence checks for performance on large libraries.
+    """
+    from concurrent.futures import ThreadPoolExecutor
     rows = fetchall("SELECT id, file_path, title FROM tracks")
-    for row in rows:
+    if not rows:
+        return []
+
+    def _check(row):
         if not os.path.exists(row['file_path']):
-            broken.append({
-                'id': row['id'],
-                'file_path': row['file_path'],
-                'title': row['title'],
-            })
+            return {'id': row['id'], 'file_path': row['file_path'], 'title': row['title']}
+        return None
+
+    broken = []
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        for result in pool.map(_check, rows):
+            if result:
+                broken.append(result)
     return broken
 
 
