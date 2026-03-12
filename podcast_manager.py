@@ -48,7 +48,7 @@ _DOWNLOAD_CHUNK_SIZE = 65_536
 _MAX_FILENAME_LENGTH = 200
 
 # User-Agent for all HTTP requests
-_USER_AGENT = "MusicOtheque/1.1.0 (https://github.com/ARP273-ROSE/musicotheque)"
+_USER_AGENT = "MusicOtheque/2.0.0 (https://github.com/ARP273-ROSE/musicotheque)"
 
 # Allowed URL schemes
 _ALLOWED_SCHEMES = {"http", "https"}

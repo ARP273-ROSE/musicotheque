@@ -12,7 +12,7 @@ import traceback
 import time
 from pathlib import Path
 
-VERSION = '2.0.0'
+VERSION = '2.0.1'
 APP_NAME = 'MusicOthèque'
 APP_DIR = Path(__file__).parent
 

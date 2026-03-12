@@ -13,7 +13,7 @@ log = logging.getLogger(__name__)
 # MusicBrainz rate limit: 1 request per second
 _RATE_LIMIT = 1.1
 _last_request = 0.0
-_USER_AGENT = 'MusicOtheque/1.0.0 (https://github.com/ARP273-ROSE/musicotheque)'
+_USER_AGENT = 'MusicOtheque/2.0.0 (https://github.com/ARP273-ROSE/musicotheque)'
 
 
 def _mb_request(endpoint, params=None):
@@ -292,3 +292,5 @@ class MetadataFetchWorker(QObject):
         except Exception as e:
             log.exception("Metadata fetch error")
             self.error.emit(str(e))
+        finally:
+            db.close_connection()

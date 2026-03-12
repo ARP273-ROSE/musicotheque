@@ -296,6 +296,8 @@ class ITunesImportWorker(QObject):
         except Exception as e:
             log.exception("iTunes import error")
             self.error.emit(str(e))
+        finally:
+            db.close_connection()
 
 
 def parse_itunes_podcasts(xml_path):
@@ -438,3 +440,5 @@ class ITunesPodcastImportWorker(QObject):
         except Exception as e:
             log.exception("iTunes podcast import error")
             self.error.emit(str(e))
+        finally:
+            db.close_connection()

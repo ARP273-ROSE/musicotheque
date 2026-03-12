@@ -300,7 +300,8 @@ def detect_language():
     """Detect system language, default to English."""
     global _LANG
     try:
-        loc = locale.getdefaultlocale()[0] or ''
+        # getlocale() is preferred over deprecated getdefaultlocale()
+        loc = locale.getlocale()[0] or locale.getdefaultlocale()[0] or ''
         _LANG = 'fr' if loc.startswith('fr') else 'en'
     except Exception:
         _LANG = 'en'

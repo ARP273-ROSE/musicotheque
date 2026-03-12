@@ -310,3 +310,5 @@ class ScanWorker(QObject):
         except Exception as e:
             log.exception("Scan error")
             self.error.emit(str(e))
+        finally:
+            db.close_connection()

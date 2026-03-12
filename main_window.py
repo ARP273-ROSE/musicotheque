@@ -1347,18 +1347,20 @@ class MainWindow(QMainWindow):
 
     def _show_track_info(self, track):
         """Show track information dialog."""
+        import html as html_mod
+        esc = html_mod.escape
         info_parts = [
-            f"<b>{T('col_title')}:</b> {track.get('title', '')}",
-            f"<b>{T('col_artist')}:</b> {track.get('artist_name', '')}",
-            f"<b>{T('col_album')}:</b> {track.get('album_title', '')}",
+            f"<b>{T('col_title')}:</b> {esc(str(track.get('title', '')))}",
+            f"<b>{T('col_artist')}:</b> {esc(str(track.get('artist_name', '')))}",
+            f"<b>{T('col_album')}:</b> {esc(str(track.get('album_title', '')))}",
             f"<b>{T('col_duration')}:</b> {format_duration(track.get('duration_ms', 0))}",
-            f"<b>{T('col_format')}:</b> {track.get('file_format', '')}",
+            f"<b>{T('col_format')}:</b> {esc(str(track.get('file_format', '')))}",
             f"<b>{T('col_sample_rate')}:</b> {format_sample_rate(track.get('sample_rate', 0))}",
             f"<b>{T('col_bit_depth')}:</b> {track.get('bit_depth', 0)}-bit",
             f"<b>{T('col_bitrate')}:</b> {format_bitrate(track.get('bitrate', 0))}",
-            f"<b>{T('col_year')}:</b> {track.get('year', '')}",
-            f"<b>{T('col_genre')}:</b> {track.get('genre', '')}",
-            f"<b>Path:</b> {track.get('file_path', '')}",
+            f"<b>{T('col_year')}:</b> {esc(str(track.get('year', '')))}",
+            f"<b>{T('col_genre')}:</b> {esc(str(track.get('genre', '')))}",
+            f"<b>Path:</b> {esc(str(track.get('file_path', '')))}",
         ]
         QMessageBox.information(self, T('track_info'), '<br>'.join(info_parts))
 
@@ -1470,29 +1472,37 @@ class MainWindow(QMainWindow):
         webbrowser.open('https://github.com/ARP273-ROSE/musicotheque/issues/new')
 
     def _on_check_updates(self):
-        """Manual update check."""
-        try:
-            import requests
-            resp = requests.get(
-                'https://api.github.com/repos/ARP273-ROSE/musicotheque/releases/latest',
-                timeout=5, headers={'User-Agent': 'MusicOtheque'}
-            )
-            if resp.status_code == 200:
-                data = resp.json()
-                remote = data.get('tag_name', '').lstrip('v')
-                version_file = Path(__file__).parent / 'VERSION'
-                current = version_file.read_text().strip() if version_file.exists() else '?'
-                if remote and remote != current:
-                    QMessageBox.information(
-                        self, T('check_updates'),
-                        f"Update available: {current} -> {remote}"
-                    )
+        """Manual update check (non-blocking)."""
+        import threading
+
+        self._status_bar.showMessage(T('check_updates') + '...')
+
+        def _check():
+            try:
+                import requests
+                resp = requests.get(
+                    'https://api.github.com/repos/ARP273-ROSE/musicotheque/releases/latest',
+                    timeout=5, headers={'User-Agent': 'MusicOtheque/2.0.0'}
+                )
+                if resp.status_code == 200:
+                    data = resp.json()
+                    remote = data.get('tag_name', '').lstrip('v')
+                    version_file = Path(__file__).parent / 'VERSION'
+                    current = version_file.read_text().strip() if version_file.exists() else '?'
+                    if remote and remote != current:
+                        # Use QTimer to show dialog on main thread
+                        QTimer.singleShot(0, lambda: QMessageBox.information(
+                            self, T('check_updates'),
+                            f"Update available: {current} -> {remote}"
+                        ))
+                    else:
+                        QTimer.singleShot(0, lambda: self._status_bar.showMessage("Up to date", 3000))
                 else:
-                    self._status_bar.showMessage("Up to date", 3000)
-            else:
-                self._status_bar.showMessage("No releases found", 3000)
-        except Exception as e:
-            self._status_bar.showMessage(f"Update check failed: {e}", 3000)
+                    QTimer.singleShot(0, lambda: self._status_bar.showMessage("No releases found", 3000))
+            except Exception as e:
+                QTimer.singleShot(0, lambda: self._status_bar.showMessage(f"Update check failed: {e}", 3000))
+
+        threading.Thread(target=_check, daemon=True).start()
 
     # --- Podcast actions ---
 
@@ -1660,41 +1670,74 @@ class MainWindow(QMainWindow):
             self._status_bar.showMessage(f"Error: {e}", 5000)
 
     def _on_podcast_refresh(self):
-        """Refresh all podcast feeds."""
+        """Refresh all podcast feeds (in background thread)."""
         podcasts = db.fetchall("SELECT id, feed_url, title FROM podcasts WHERE feed_url IS NOT NULL")
         if not podcasts:
             self._status_bar.showMessage("No podcast subscriptions", 3000)
             return
 
-        new_total = 0
-        for pod in podcasts:
-            try:
-                feed_data = parse_rss_feed(pod['feed_url'])
-                if not feed_data:
-                    continue
-                for ep in feed_data.get('episodes', []):
-                    duration_ms = ep.get('duration_seconds', 0) * 1000
-                    result = db.execute("""
-                        INSERT OR IGNORE INTO podcast_episodes(
-                            podcast_id, title, description, guid,
-                            published_at, duration_ms, file_url, file_size
-                        ) VALUES(?, ?, ?, ?, ?, ?, ?, ?)
-                    """, (
-                        pod['id'], ep.get('title'), ep.get('description'),
-                        ep.get('guid'), ep.get('published'),
-                        duration_ms, ep.get('audio_url'),
-                        ep.get('file_size', 0)
-                    ), commit=False)
-                    if result.rowcount > 0:
-                        new_total += 1
-                db.execute(
-                    "UPDATE podcasts SET last_checked = datetime('now') WHERE id = ?",
-                    (pod['id'],), commit=False
-                )
-            except Exception as e:
-                log.warning("Feed refresh failed for %s: %s", pod['title'], e)
-        db.commit()
-        self._status_bar.showMessage(f"{new_total} new episodes found", 5000)
+        # Run in background thread to avoid blocking UI
+        class RefreshWorker(QObject):
+            finished = pyqtSignal(int)
+            error = pyqtSignal(str)
+
+            def __init__(self, pods):
+                super().__init__()
+                self._pods = pods
+
+            def run(self):
+                try:
+                    new_total = 0
+                    for pod in self._pods:
+                        try:
+                            feed_data = parse_rss_feed(pod['feed_url'])
+                            if not feed_data:
+                                continue
+                            for ep in feed_data.get('episodes', []):
+                                duration_ms = ep.get('duration_seconds', 0) * 1000
+                                result = db.execute("""
+                                    INSERT OR IGNORE INTO podcast_episodes(
+                                        podcast_id, title, description, guid,
+                                        published_at, duration_ms, file_url, file_size
+                                    ) VALUES(?, ?, ?, ?, ?, ?, ?, ?)
+                                """, (
+                                    pod['id'], ep.get('title'), ep.get('description'),
+                                    ep.get('guid'), ep.get('published'),
+                                    duration_ms, ep.get('audio_url'),
+                                    ep.get('file_size', 0)
+                                ), commit=False)
+                                if result.rowcount > 0:
+                                    new_total += 1
+                            db.execute(
+                                "UPDATE podcasts SET last_checked = datetime('now') WHERE id = ?",
+                                (pod['id'],), commit=False
+                            )
+                        except Exception as e:
+                            log.warning("Feed refresh failed for %s: %s", pod['title'], e)
+                    db.commit()
+                    self.finished.emit(new_total)
+                except Exception as e:
+                    log.exception("Podcast refresh error")
+                    self.error.emit(str(e))
+                finally:
+                    db.close_connection()
+
+        worker = RefreshWorker(list(podcasts))
+        thread = QThread()
+        worker.moveToThread(thread)
+        thread.started.connect(worker.run)
+        worker.finished.connect(lambda n: self._on_podcast_refresh_done(n))
+        worker.error.connect(lambda msg: self._status_bar.showMessage(f"Error: {msg}", 5000))
+        worker.finished.connect(thread.quit)
+        worker.error.connect(thread.quit)
+        self._podcast_thread = thread
+        self._podcast_refresh_worker = worker
+        self._status_bar.showMessage(T('podcast_refresh') + '...')
+        thread.start()
+
+    def _on_podcast_refresh_done(self, new_count):
+        """Handle podcast refresh completion."""
+        self._status_bar.showMessage(f"{new_count} new episodes found", 5000)
         self._refresh_library()
 
     # --- CD Rip ---
@@ -1723,13 +1766,14 @@ class MainWindow(QMainWindow):
             return
 
         # Ask for output directory
+        default_dir = str(Path.home() / 'Music')
         output_dir = QFileDialog.getExistingDirectory(
-            self, T('cd_output_dir'), 'P:/Musique'
+            self, T('cd_output_dir'), default_dir
         )
         if not output_dir:
             return
 
-        worker = CDRipWorker(drive['drive_letter'], output_dir)
+        worker = CDRipWorker(drive['drive'], output_dir)
         self._cd_thread = QThread()
         worker.moveToThread(self._cd_thread)
 
@@ -1885,12 +1929,22 @@ class MainWindow(QMainWindow):
         self._player.stop()
         self._backup_timer.stop()
 
-        # Cancel workers
-        if self._scan_worker:
-            self._scan_worker.cancel()
-        if self._scan_thread and self._scan_thread.isRunning():
-            self._scan_thread.quit()
-            self._scan_thread.wait(2000)
+        # Cancel all workers
+        for worker_attr in ('_scan_worker', '_import_worker', '_fetch_worker',
+                            '_harmonize_worker', '_cd_worker',
+                            '_podcast_import_worker', '_podcast_refresh_worker'):
+            worker = getattr(self, worker_attr, None)
+            if worker and hasattr(worker, 'cancel'):
+                worker.cancel()
+
+        # Wait for all threads to finish
+        for thread_attr in ('_scan_thread', '_import_thread', '_fetch_thread',
+                            '_harmonize_thread', '_cd_thread',
+                            '_podcast_thread', '_podcast_import_thread'):
+            thread = getattr(self, thread_attr, None)
+            if thread and thread.isRunning():
+                thread.quit()
+                thread.wait(2000)
 
         # Backup on exit
         try:
@@ -2255,6 +2309,8 @@ class StatsDialog(QDialog):
 
     def _build_stats_html(self):
         """Build complete statistics HTML."""
+        import html as html_mod
+        esc = html_mod.escape
         stats = db.get_library_stats()
 
         # Detailed queries
@@ -2394,7 +2450,7 @@ class StatsDialog(QDialog):
                 bg = '#2a2a2a' if i % 2 == 0 else '#333'
                 fmt = row['file_format'] or '?'
                 html += f'<tr style="background:{bg};">'
-                html += f'<td style="color:#fff; font-weight:bold;">{fmt}</td>'
+                html += f'<td style="color:#fff; font-weight:bold;">{esc(fmt)}</td>'
                 html += f'<td style="color:#ccc; text-align:right;">{row["cnt"]:,}</td>'
                 html += f'<td style="color:#ccc; text-align:right;">{format_size(row["sz"] or 0)}</td>'
                 html += f'<td style="color:#ccc; text-align:right;">{fmt_total_dur(row["dur"] or 0)}</td></tr>'
@@ -2409,7 +2465,7 @@ class StatsDialog(QDialog):
                 bg = '#2a2a2a' if i % 2 == 0 else '#333'
                 bar_w = int(row['cnt'] * 250 / max_cnt)
                 html += f'<tr style="background:{bg};">'
-                html += f'<td style="color:#fff; width:200px;">{row["name"]}</td>'
+                html += f'<td style="color:#fff; width:200px;">{esc(row["name"])}</td>'
                 html += f'<td><div style="background:#4fc3f7; width:{max(bar_w, 2)}px; '
                 html += f'height:14px; border-radius:3px; display:inline-block;"></div> '
                 html += f'<span style="color:#aaa;">{row["cnt"]}</span></td></tr>'
@@ -2424,7 +2480,7 @@ class StatsDialog(QDialog):
                 bg = '#2a2a2a' if i % 2 == 0 else '#333'
                 bar_w = int(row['cnt'] * 250 / max_cnt)
                 html += f'<tr style="background:{bg};">'
-                html += f'<td style="color:#fff; width:200px;">{row["genre"]}</td>'
+                html += f'<td style="color:#fff; width:200px;">{esc(row["genre"])}</td>'
                 html += f'<td><div style="background:#ffa726; width:{max(bar_w, 2)}px; '
                 html += f'height:14px; border-radius:3px; display:inline-block;"></div> '
                 html += f'<span style="color:#aaa;">{row["cnt"]}</span></td></tr>'
@@ -2437,8 +2493,8 @@ class StatsDialog(QDialog):
             for i, row in enumerate(top_played):
                 bg = '#2a2a2a' if i % 2 == 0 else '#333'
                 html += f'<tr style="background:{bg};">'
-                html += f'<td style="color:#fff;">{row["title"]}</td>'
-                html += f'<td style="color:#aaa;">{row["artist_name"] or ""}</td>'
+                html += f'<td style="color:#fff;">{esc(row["title"])}</td>'
+                html += f'<td style="color:#aaa;">{esc(row["artist_name"] or "")}</td>'
                 html += f'<td style="color:#4fc3f7; text-align:right; font-weight:bold;">'
                 html += f'{row["play_count"]}x</td></tr>'
             html += '</table>'
@@ -2451,7 +2507,7 @@ class StatsDialog(QDialog):
                 bg = '#2a2a2a' if i % 2 == 0 else '#333'
                 last = str(row['last_scan'])[:19] if row['last_scan'] else '-'
                 html += f'<tr style="background:{bg};">'
-                html += f'<td style="color:#fff;">{row["path"]}</td>'
+                html += f'<td style="color:#fff;">{esc(row["path"])}</td>'
                 html += f'<td style="color:#aaa; text-align:right;">{last}</td></tr>'
             html += '</table>'
 
