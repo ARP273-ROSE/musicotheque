@@ -22,7 +22,7 @@
 - **Gapless playback** with pre-buffering
 - Playback queue with **shuffle** and **repeat** modes (off / all / one)
 - **Volume control** with mute toggle
-- Play count tracking and last played timestamps
+- **Smart play count**: tracks listened for at least 30 seconds (skipped tracks don't count)
 
 #### Podcast Manager
 - **Subscribe** to podcasts by RSS feed URL

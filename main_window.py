@@ -31,7 +31,8 @@ from scanner import ScanWorker
 from itunes_import import ITunesImportWorker, ITunesPodcastImportWorker
 from metadata_fetch import MetadataFetchWorker
 from backup_manager import backup_database, restore_database, list_backups
-from podcast_manager import PodcastDownloadWorker, parse_rss_feed, search_podcasts
+from podcast_manager import (PodcastDownloadWorker, PodcastSubscribeWorker,
+                              parse_rss_feed, search_podcasts)
 
 log = logging.getLogger(__name__)
 
@@ -681,7 +682,7 @@ class MainWindow(QMainWindow):
 
         if view == 'all_tracks':
             tracks = db.fetchall("""
-                SELECT t.*, a.name as artist_name, al.title as album_title, al.cover_data
+                SELECT t.*, a.name as artist_name, al.title as album_title
                 FROM tracks t
                 LEFT JOIN artists a ON t.artist_id = a.id
                 LEFT JOIN albums al ON t.album_id = al.id
@@ -698,7 +699,7 @@ class MainWindow(QMainWindow):
             return
         elif view == 'artist' and filter_value:
             tracks = db.fetchall("""
-                SELECT t.*, a.name as artist_name, al.title as album_title, al.cover_data
+                SELECT t.*, a.name as artist_name, al.title as album_title
                 FROM tracks t
                 LEFT JOIN artists a ON t.artist_id = a.id
                 LEFT JOIN albums al ON t.album_id = al.id
@@ -707,7 +708,7 @@ class MainWindow(QMainWindow):
             """, (filter_value, filter_value))
         elif view == 'album' and filter_value:
             tracks = db.fetchall("""
-                SELECT t.*, a.name as artist_name, al.title as album_title, al.cover_data
+                SELECT t.*, a.name as artist_name, al.title as album_title
                 FROM tracks t
                 LEFT JOIN artists a ON t.artist_id = a.id
                 LEFT JOIN albums al ON t.album_id = al.id
@@ -716,7 +717,7 @@ class MainWindow(QMainWindow):
             """, (filter_value,))
         elif view == 'genre' and filter_value:
             tracks = db.fetchall("""
-                SELECT t.*, a.name as artist_name, al.title as album_title, al.cover_data
+                SELECT t.*, a.name as artist_name, al.title as album_title
                 FROM tracks t
                 LEFT JOIN artists a ON t.artist_id = a.id
                 LEFT JOIN albums al ON t.album_id = al.id
@@ -726,7 +727,7 @@ class MainWindow(QMainWindow):
         elif view.startswith('playlist:'):
             pl_id = int(view.split(':')[1])
             tracks = db.fetchall("""
-                SELECT t.*, a.name as artist_name, al.title as album_title, al.cover_data
+                SELECT t.*, a.name as artist_name, al.title as album_title
                 FROM playlist_tracks pt
                 JOIN tracks t ON pt.track_id = t.id
                 LEFT JOIN artists a ON t.artist_id = a.id
@@ -1018,8 +1019,12 @@ class MainWindow(QMainWindow):
         self._track_title_label.setText(track.get('title', ''))
         self._track_artist_label.setText(track.get('artist_name', track.get('artist', '')))
 
-        # Cover art
-        cover = track.get('cover_data')
+        # Cover art (load on demand, not in listing queries)
+        album_id = track.get('album_id')
+        cover = None
+        if album_id:
+            row = db.fetchone("SELECT cover_data FROM albums WHERE id = ?", (album_id,))
+            cover = row['cover_data'] if row else None
         pm = cover_to_pixmap(cover, 64) if cover else None
         if pm:
             self._cover_label.setPixmap(pm)
@@ -1065,11 +1070,19 @@ class MainWindow(QMainWindow):
         else:
             self._quality_label.hide()
 
-        # Update play count in DB
-        db.execute(
-            "UPDATE tracks SET play_count = play_count + 1, last_played = datetime('now') WHERE file_path = ?",
-            (track.get('file_path', ''),), commit=True
-        )
+        # Record play count for previous track if listened >= 30 seconds
+        import time as _time
+        prev_path = getattr(self, '_playing_track_path', None)
+        prev_start = getattr(self, '_playing_track_start', 0)
+        if prev_path and (_time.time() - prev_start) >= 30:
+            db.execute(
+                "UPDATE tracks SET play_count = play_count + 1, last_played = datetime('now') WHERE file_path = ?",
+                (prev_path,), commit=True
+            )
+
+        # Track start time for play count threshold
+        self._playing_track_path = track.get('file_path', '')
+        self._playing_track_start = _time.time()
 
     def _on_volume_changed(self, vol):
         """Update volume slider and mute button."""
@@ -1442,8 +1455,25 @@ class MainWindow(QMainWindow):
         self._refresh_library()
 
     def _on_check_broken(self):
-        """Check for broken file paths."""
-        broken = db.find_broken_paths()
+        """Check for broken file paths (in background thread)."""
+        import threading
+
+        self._status_bar.showMessage(T('broken_paths') + '...')
+
+        def _check():
+            try:
+                broken = db.find_broken_paths()
+            except Exception:
+                broken = []
+            finally:
+                db.close_connection()
+            from PyQt6.QtCore import QTimer
+            QTimer.singleShot(0, lambda: self._show_broken_results(broken))
+
+        threading.Thread(target=_check, daemon=True).start()
+
+    def _show_broken_results(self, broken):
+        """Display broken paths results on main thread."""
         if not broken:
             self._status_bar.showMessage(T('no_broken_paths'), 5000)
             return
@@ -1560,114 +1590,67 @@ class MainWindow(QMainWindow):
         )
         if not ok or not url:
             return
+        self._run_podcast_subscribe(url)
 
-        try:
-            feed_data = parse_rss_feed(url)
-            if not feed_data:
-                self._status_bar.showMessage(T('error'), 5000)
-                return
+    def _run_podcast_subscribe(self, url):
+        """Run podcast subscription in a worker thread."""
+        worker = PodcastSubscribeWorker(url)
+        thread = QThread()
+        worker.moveToThread(thread)
 
-            # Create podcast in DB
-            podcast_id = db.get_or_create_podcast(
-                feed_data['title'], feed_url=url, author=feed_data.get('author')
-            )
-
-            # Update podcast metadata
-            db.execute("""
-                UPDATE podcasts SET
-                    description = ?, category = ?, language = ?,
-                    image_url = ?, last_checked = datetime('now')
-                WHERE id = ?
-            """, (
-                feed_data.get('description'), feed_data.get('category'),
-                feed_data.get('language'), feed_data.get('image_url'),
-                podcast_id
-            ), commit=True)
-
-            # Insert episodes
-            for ep in feed_data.get('episodes', []):
-                duration_ms = ep.get('duration_seconds', 0) * 1000
-                db.execute("""
-                    INSERT OR IGNORE INTO podcast_episodes(
-                        podcast_id, title, description, guid,
-                        published_at, duration_ms, file_url, file_size
-                    ) VALUES(?, ?, ?, ?, ?, ?, ?, ?)
-                """, (
-                    podcast_id, ep.get('title'), ep.get('description'),
-                    ep.get('guid'), ep.get('published'),
-                    duration_ms, ep.get('audio_url'),
-                    ep.get('file_size', 0)
-                ), commit=False)
-            db.commit()
-
-            self._status_bar.showMessage(
-                f"Subscribed: {feed_data['title']} ({len(feed_data.get('episodes', []))} episodes)",
-                5000
-            )
+        thread.started.connect(worker.run)
+        worker.finished.connect(lambda pid: (
+            self._status_bar.showMessage(T('podcast_subscribed'), 5000),
             self._refresh_library()
+        ))
+        worker.error.connect(lambda msg: self._status_bar.showMessage(f"Error: {msg}", 5000))
+        worker.finished.connect(thread.quit)
+        worker.error.connect(thread.quit)
 
-        except Exception as e:
-            log.exception("Podcast subscribe error")
-            self._status_bar.showMessage(f"Error: {e}", 5000)
+        self._podcast_subscribe_worker = worker
+        self._podcast_subscribe_thread = thread
+        self._status_bar.showMessage(T('podcast_subscribe') + '...')
+        thread.start()
 
     def _on_podcast_search(self):
-        """Search podcasts online (iTunes directory)."""
+        """Search podcasts online (iTunes directory) in a worker thread."""
         query, ok = QInputDialog.getText(
             self, T('podcast_search'), T('search')
         )
         if not ok or not query:
             return
 
-        try:
-            results = search_podcasts(query)
-            if not results:
-                self._status_bar.showMessage(T('no_results'), 3000)
-                return
+        import threading
 
-            # Show results in a dialog
-            items = [f"{r['name']} — {r['author']}" for r in results]
-            item, ok = QInputDialog.getItem(
-                self, T('podcast_search'),
-                f"{len(results)} results:", items, 0, False
-            )
-            if ok:
-                idx = items.index(item)
-                feed_url = results[idx].get('feed_url')
-                if feed_url:
-                    # Subscribe automatically
-                    self._on_podcast_subscribe_url(feed_url)
-        except Exception as e:
-            self._status_bar.showMessage(f"Search error: {e}", 5000)
+        self._status_bar.showMessage(T('podcast_search') + '...')
 
-    def _on_podcast_subscribe_url(self, url):
-        """Subscribe to podcast by URL directly."""
-        try:
-            feed_data = parse_rss_feed(url)
-            if feed_data:
-                podcast_id = db.get_or_create_podcast(
-                    feed_data['title'], feed_url=url,
-                    author=feed_data.get('author')
-                )
-                for ep in feed_data.get('episodes', []):
-                    duration_ms = ep.get('duration_seconds', 0) * 1000
-                    db.execute("""
-                        INSERT OR IGNORE INTO podcast_episodes(
-                            podcast_id, title, description, guid,
-                            published_at, duration_ms, file_url, file_size
-                        ) VALUES(?, ?, ?, ?, ?, ?, ?, ?)
-                    """, (
-                        podcast_id, ep.get('title'), ep.get('description'),
-                        ep.get('guid'), ep.get('published'),
-                        duration_ms, ep.get('audio_url'),
-                        ep.get('file_size', 0)
-                    ), commit=False)
-                db.commit()
-                self._status_bar.showMessage(
-                    f"Subscribed: {feed_data['title']}", 5000
-                )
-                self._refresh_library()
-        except Exception as e:
-            self._status_bar.showMessage(f"Error: {e}", 5000)
+        def _search():
+            try:
+                results = search_podcasts(query)
+                from PyQt6.QtCore import QTimer
+                QTimer.singleShot(0, lambda: self._on_podcast_search_done(results))
+            except Exception as e:
+                from PyQt6.QtCore import QTimer
+                QTimer.singleShot(0, lambda: self._status_bar.showMessage(f"Search error: {e}", 5000))
+
+        threading.Thread(target=_search, daemon=True).start()
+
+    def _on_podcast_search_done(self, results):
+        """Handle podcast search results on main thread."""
+        if not results:
+            self._status_bar.showMessage(T('no_results'), 3000)
+            return
+
+        items = [f"{r['name']} — {r['author']}" for r in results]
+        item, ok = QInputDialog.getItem(
+            self, T('podcast_search'),
+            f"{len(results)} results:", items, 0, False
+        )
+        if ok:
+            idx = items.index(item)
+            feed_url = results[idx].get('feed_url')
+            if feed_url:
+                self._run_podcast_subscribe(feed_url)
 
     def _on_podcast_refresh(self):
         """Refresh all podcast feeds (in background thread)."""
@@ -1821,7 +1804,7 @@ class MainWindow(QMainWindow):
         if reply != QMessageBox.StandardButton.Yes:
             return
 
-        worker = HarmonizeWorker(preview=True)
+        worker = HarmonizeWorker(mode='preview')
         self._harmonize_thread = QThread()
         worker.moveToThread(self._harmonize_thread)
 
@@ -1869,7 +1852,7 @@ class MainWindow(QMainWindow):
         """Apply harmonization changes."""
         from harmonizer import HarmonizeWorker
 
-        worker = HarmonizeWorker(preview=False)
+        worker = HarmonizeWorker(mode='apply')
         self._harmonize_thread = QThread()
         worker.moveToThread(self._harmonize_thread)
 
@@ -1925,6 +1908,16 @@ class MainWindow(QMainWindow):
         self._settings.setValue('windowState', self.saveState())
         self._settings.setValue('volume', self._player.volume)
 
+        # Record play count for current track before closing
+        import time as _time
+        prev_path = getattr(self, '_playing_track_path', None)
+        prev_start = getattr(self, '_playing_track_start', 0)
+        if prev_path and (_time.time() - prev_start) >= 30:
+            db.execute(
+                "UPDATE tracks SET play_count = play_count + 1, last_played = datetime('now') WHERE file_path = ?",
+                (prev_path,), commit=True
+            )
+
         # Stop playback
         self._player.stop()
         self._backup_timer.stop()
@@ -1932,7 +1925,8 @@ class MainWindow(QMainWindow):
         # Cancel all workers
         for worker_attr in ('_scan_worker', '_import_worker', '_fetch_worker',
                             '_harmonize_worker', '_cd_worker',
-                            '_podcast_import_worker', '_podcast_refresh_worker'):
+                            '_podcast_import_worker', '_podcast_refresh_worker',
+                            '_podcast_subscribe_worker'):
             worker = getattr(self, worker_attr, None)
             if worker and hasattr(worker, 'cancel'):
                 worker.cancel()
@@ -1940,7 +1934,8 @@ class MainWindow(QMainWindow):
         # Wait for all threads to finish
         for thread_attr in ('_scan_thread', '_import_thread', '_fetch_thread',
                             '_harmonize_thread', '_cd_thread',
-                            '_podcast_thread', '_podcast_import_thread'):
+                            '_podcast_thread', '_podcast_import_thread',
+                            '_podcast_subscribe_thread'):
             thread = getattr(self, thread_attr, None)
             if thread and thread.isRunning():
                 thread.quit()

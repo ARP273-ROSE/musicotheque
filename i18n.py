@@ -189,6 +189,7 @@ TX = {
     'podcast_episodes': {'en': 'Episodes', 'fr': 'Épisodes'},
     'podcast_subscribe': {'en': 'Subscribe to Podcast...', 'fr': 'S\'abonner à un podcast...'},
     'podcast_subscribe_tip': {'en': 'Add a podcast by RSS feed URL', 'fr': 'Ajouter un podcast par URL de flux RSS'},
+    'podcast_subscribed': {'en': 'Podcast subscribed successfully', 'fr': 'Abonnement au podcast réussi'},
     'podcast_search': {'en': 'Search Podcasts Online...', 'fr': 'Chercher des podcasts en ligne...'},
     'podcast_search_tip': {'en': 'Search iTunes podcast directory', 'fr': 'Chercher dans le répertoire de podcasts iTunes'},
     'podcast_refresh': {'en': 'Refresh Feeds', 'fr': 'Actualiser les flux'},

@@ -1,7 +1,7 @@
 """Online metadata fetcher using MusicBrainz API."""
 import logging
 import time
-import hashlib
+
 from pathlib import Path
 
 from PyQt6.QtCore import QObject, pyqtSignal

@@ -3,7 +3,6 @@ import sqlite3
 import threading
 import os
 import logging
-from pathlib import PurePosixPath, PureWindowsPath
 
 log = logging.getLogger(__name__)
 
@@ -456,10 +455,11 @@ def relocate_paths(old_prefix, new_prefix):
     old_prefix = old_prefix.replace('\\', '/')
     new_prefix = new_prefix.replace('\\', '/')
 
-    # Update tracks
+    # Update tracks — escape LIKE wildcards in prefix, then match
+    like_prefix = old_prefix.replace('%', '\\%').replace('_', '\\_') + '%'
     rows = fetchall(
-        "SELECT id, file_path FROM tracks WHERE file_path LIKE ?",
-        (old_prefix.replace('/', '%').replace('\\', '%')[:3] + '%',)
+        "SELECT id, file_path FROM tracks WHERE replace(file_path, '\\', '/') LIKE ? ESCAPE '\\'",
+        (like_prefix,)
     )
     count = 0
     for row in rows:
