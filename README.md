@@ -50,6 +50,15 @@
 - Live streaming with LIVE badge in player bar
 - Browse by category in sidebar
 
+#### Audio Visualizer (Ctrl+V)
+- **Spectrum Analyzer** — 64-bar real-time frequency display with per-bar gradient, cyan peak hold (1s hold, 10 dB/s decay), dB scale labels, professional ballistics (0.8 attack, 15 dB/s decay)
+- **VU Meter** — True stereo RMS level meter with separate L/R channels and peak markers, IEC 60268-17 ballistics (300ms attack, 13.3 dB/s decay), dB labels and real-time level readout
+- **Spectrogram** — Optimized waterfall frequency display with perceptually-uniform inferno colormap, frequency axis labels (20 Hz–20 kHz), numpy-accelerated rendering
+- Uses `QAudioBufferOutput` for zero-copy PCM access (no external capture needed)
+- Lightweight: < 4% CPU total via QPainter rendering at 10-20 fps
+- Designed for HiFi setups with DAC and high-end headphones
+- Toggle on/off anytime during playback
+
 #### CD Audio Import
 - **Rip audio CDs** to FLAC format
 - **MusicBrainz lookup** for automatic track names, album, artist, and cover art
@@ -70,6 +79,16 @@
 - Path remapping for relocated libraries
 - Smart duplicate detection
 
+#### Music Classification
+- **Automatic period detection** from composer metadata: Medieval, Renaissance, Baroque, Classical, Romantic, Modern, Contemporary
+- **200+ composers** mapped to historical periods (with birth/death years)
+- **60+ musical forms** detected from titles: Symphony, Concerto, Sonata, Fugue, Nocturne, Opera, Requiem, String Quartet, etc.
+- **Catalogue number extraction**: BWV (Bach), K./KV (Mozart), Op., D. (Schubert), RV (Vivaldi), HWV (Handel), and more
+- **Instrumentation detection**: Piano, Violin, Orchestra, Chamber, Choir, etc.
+- **Key detection**: e.g., "C minor", "E-flat major"
+- Batch classification of entire library with period/form statistics
+- Per-track classification visible in track info dialog
+
 #### Online Metadata
 - **MusicBrainz** integration for track identification
 - **Cover Art Archive** for album artwork
@@ -83,21 +102,37 @@
 - **Most played** tracks
 - Total size and duration for every view (playlist, folder, genre, artist)
 
+#### File Organizer
+- **Organize files on disk** into clean `Artist / Album / Track` folder structure
+- Smart filename sanitization (cross-platform safe)
+- Disc/track number prefixes for correct sort order
+- Automatic database path updates after moving files
+- Duplicate detection with automatic renaming
+
+#### Library Watcher
+- **Automatic monitoring** of scan folders for file changes
+- Polling-based (works on NAS/SMB shares, network drives — no inotify dependency)
+- **Auto-relocation**: detects drive letter changes and fixes paths automatically
+- Cross-platform: handles Windows→Linux path translation transparently
+- 3-minute poll interval, triggers background re-scan on changes
+
 #### Cross-Platform
 - **Windows**, **Linux**, and **macOS** support
 - OS-appropriate data directories (APPDATA / XDG_DATA_HOME / Library)
 - **Path relocation** tool for migrated libraries (e.g., `J:/Music` → `/mnt/nas/Music`)
+- **Automatic path relocation** on drive letter changes (transparent, no user action)
 - Broken path detection and reporting
 
 #### Data Safety
-- **Auto-backup** every 30 minutes + on exit
+- **Continuous auto-backup** every 5 minutes (transparent, background thread)
+- Additional backup on exit
 - Backup rotation: 5 daily + 4 weekly
 - **Atomic saves** (write-tmp-then-rename)
 - **SQLite WAL mode** with thread-safe access
 - Export library to portable JSON
 
 #### Bilingual Interface
-- Full **English / French** interface with 300+ translation keys
+- Full **English / French** interface with 400+ translation keys
 - Automatic system language detection
 - All tooltips, menus, dialogs, and help in both languages
 
@@ -138,6 +173,7 @@ python musicotheque.py
 - mutagen (metadata reading)
 - requests (MusicBrainz API, podcast search)
 - feedparser (RSS podcast feeds)
+- numpy (audio visualization FFT)
 - ffmpeg (optional, for CD ripping)
 
 ---
@@ -154,6 +190,8 @@ python musicotheque.py
 8. **Rip CD**: File → Import Audio CD
 9. **Harmonize**: Tools → Harmonize Metadata
 10. **Statistics**: Tools → Library Statistics (Ctrl+I)
+11. **Classify**: Tools → Classify Library (period, form, catalogue detection)
+12. **Organize**: Tools → Organize Files on Disk (Artist/Album/Track structure)
 
 ### Keyboard Shortcuts
 
@@ -168,6 +206,7 @@ python musicotheque.py
 | `Ctrl+F` | Search |
 | `F5` | Rescan library |
 | `Ctrl+R` | Smart Radio |
+| `Ctrl+V` | Audio Visualizer |
 | `Ctrl+I` | Library Statistics |
 | `Ctrl+,` | Settings |
 | `Ctrl+Q` | Quit |
@@ -184,7 +223,7 @@ python musicotheque.py
 | `player.py` | QMediaPlayer audio engine with queue, shuffle, repeat |
 | `scanner.py` | Folder scanner with mutagen metadata extraction |
 | `database.py` | SQLite WAL, FTS5 full-text search, thread-safe, path relocation |
-| `i18n.py` | Bilingual translation system (300+ keys) |
+| `i18n.py` | Bilingual translation system (370+ keys) |
 | `itunes_import.py` | iTunes Library XML parser (music + podcasts) |
 | `metadata_fetch.py` | MusicBrainz API integration |
 | `podcast_manager.py` | RSS feed parser, episode downloader, iTunes podcast search |
@@ -192,6 +231,10 @@ python musicotheque.py
 | `harmonizer.py` | Metadata normalization (artists, composers, albums, genres) |
 | `backup_manager.py` | Auto-backup with rotation and atomic restore |
 | `web_radio.py` | 30+ curated internet radio stations with streaming URLs |
+| `music_classifier.py` | Classical music classifier (period, form, catalogue, instruments) |
+| `audio_visualizer.py` | Real-time audio visualization (spectrum, VU meter, spectrogram) |
+| `library_watcher.py` | File system watcher with auto-relocation |
+| `file_organizer.py` | File organizer (Artist/Album/Track structure) |
 
 ### Data Location
 

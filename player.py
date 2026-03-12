@@ -4,7 +4,7 @@ from enum import Enum, auto
 from pathlib import Path
 
 from PyQt6.QtCore import QObject, pyqtSignal, QUrl, Qt, QTimer
-from PyQt6.QtMultimedia import QMediaPlayer, QAudioOutput
+from PyQt6.QtMultimedia import QMediaPlayer, QAudioOutput, QAudioBufferOutput, QAudioFormat
 
 log = logging.getLogger(__name__)
 
@@ -44,6 +44,7 @@ class AudioPlayer(QObject):
     repeat_changed = pyqtSignal(object)       # RepeatMode
     shuffle_changed = pyqtSignal(object)      # ShuffleMode
     radio_changed = pyqtSignal(dict)          # station info or {} when stopped
+    audio_buffer_ready = pyqtSignal(object)   # QAudioBuffer for visualization
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -51,6 +52,21 @@ class AudioPlayer(QObject):
         self._player = QMediaPlayer(self)
         self._audio_output = QAudioOutput(self)
         self._player.setAudioOutput(self._audio_output)
+
+        # Audio buffer output for visualization (Float32 stereo 44100Hz)
+        self._buffer_output = None
+        try:
+            fmt = QAudioFormat()
+            fmt.setSampleRate(44100)
+            fmt.setChannelCount(2)
+            fmt.setSampleFormat(QAudioFormat.SampleFormat.Float)
+            self._buffer_output = QAudioBufferOutput(fmt, self)
+            self._player.setAudioBufferOutput(self._buffer_output)
+            self._buffer_output.audioBufferReceived.connect(
+                lambda buf: self.audio_buffer_ready.emit(buf)
+            )
+        except Exception as e:
+            log.info("Audio buffer output not available: %s", e)
 
         # Queue
         self._queue = []           # list of track dicts
@@ -152,6 +168,7 @@ class AudioPlayer(QObject):
 
         self._streaming = True
         self._current_station = station
+        self._reconnect_count = 0
         self._player.setSource(QUrl(url))
         self._player.play()
         self.radio_changed.emit(station)
@@ -420,7 +437,30 @@ class AudioPlayer(QObject):
         self.state_changed.emit(self._state)
 
     def _on_error(self, error, message=''):
-        """Handle player errors."""
+        """Handle player errors, with auto-reconnect for streams."""
         msg = self._player.errorString() or str(error)
         log.error("Player error: %s", msg)
+
+        if self._streaming and self._current_station:
+            # Auto-reconnect after 3 seconds for stream errors
+            reconnect_count = getattr(self, '_reconnect_count', 0)
+            if reconnect_count < 3:
+                self._reconnect_count = reconnect_count + 1
+                log.info("Stream reconnect attempt %d/3...", self._reconnect_count)
+                QTimer.singleShot(3000, self._reconnect_stream)
+                return
+            else:
+                log.warning("Stream reconnect failed after 3 attempts")
+                self._reconnect_count = 0
+                self.stop_stream()
+
         self.error_occurred.emit(msg)
+
+    def _reconnect_stream(self):
+        """Attempt to reconnect to current radio stream."""
+        if self._streaming and self._current_station:
+            url = self._current_station.get('url', '')
+            if url:
+                log.info("Reconnecting to %s", self._current_station.get('name', '?'))
+                self._player.setSource(QUrl(url))
+                self._player.play()

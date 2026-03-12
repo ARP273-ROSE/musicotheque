@@ -4,3 +4,4 @@ PyQt6-sip>=13.6.0
 mutagen>=1.47.0
 requests>=2.31.0
 feedparser>=6.0.0
+numpy>=1.24.0

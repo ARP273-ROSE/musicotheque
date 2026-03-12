@@ -13,7 +13,14 @@ log = logging.getLogger(__name__)
 # MusicBrainz rate limit: 1 request per second
 _RATE_LIMIT = 1.1
 _last_request = 0.0
-_USER_AGENT = 'MusicOtheque/2.0.0 (https://github.com/ARP273-ROSE/musicotheque)'
+def _get_user_agent():
+    try:
+        from musicotheque import VERSION
+        return f'MusicOtheque/{VERSION} (https://github.com/ARP273-ROSE/musicotheque)'
+    except Exception:
+        return 'MusicOtheque/2.2.0 (https://github.com/ARP273-ROSE/musicotheque)'
+
+_USER_AGENT = _get_user_agent()
 
 
 def _mb_request(endpoint, params=None):

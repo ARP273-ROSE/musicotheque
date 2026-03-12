@@ -38,6 +38,9 @@ from web_radio import (RADIO_STATIONS, CATEGORIES, get_stations_by_category,
 
 log = logging.getLogger(__name__)
 
+# Minimum listen time (seconds) before incrementing play count
+PLAY_COUNT_THRESHOLD_S = 30
+
 # Column definitions for podcast episodes table
 EPISODE_COLUMNS = [
     ('col_title', 'title', 300),
@@ -133,18 +136,31 @@ class MainWindow(QMainWindow):
         super().__init__()
         self._settings = QSettings('MusicOtheque', 'MusicOtheque')
         self._player = AudioPlayer(self)
+        # Worker threads and workers (all initialized to None)
         self._scan_thread = None
         self._scan_worker = None
         self._import_thread = None
+        self._import_worker = None
         self._fetch_thread = None
+        self._fetch_worker = None
         self._podcast_thread = None
         self._podcast_import_thread = None
+        self._podcast_import_worker = None
+        self._podcast_refresh_worker = None
+        self._podcast_subscribe_thread = None
+        self._podcast_subscribe_worker = None
         self._harmonize_thread = None
+        self._harmonize_worker = None
         self._cd_thread = None
+        self._cd_worker = None
+
+        # View state
         self._current_view = 'all_tracks'
         self._current_filter = None
         self._all_tracks_cache = []
         self._content_mode = 'music'  # 'music' or 'podcasts'
+        self._playing_track_path = None
+        self._playing_track_start = 0
 
         self._setup_ui()
         self._setup_menus()
@@ -152,10 +168,18 @@ class MainWindow(QMainWindow):
         self._restore_state()
         self._refresh_library()
 
-        # Auto-backup timer (every 30 minutes)
+        # Auto-backup timer (every 5 minutes for transparent continuous backup)
         self._backup_timer = QTimer(self)
         self._backup_timer.timeout.connect(self._auto_backup)
-        self._backup_timer.start(30 * 60 * 1000)
+        self._backup_timer.start(5 * 60 * 1000)
+
+        # Library file watcher — monitors folders for changes
+        from library_watcher import LibraryWatcher
+        self._watcher = LibraryWatcher(self)
+        self._watcher.changes_detected.connect(self._on_watcher_changes)
+        self._watcher.paths_relocated.connect(self._on_watcher_relocated)
+        self._watcher.scan_requested.connect(self._on_watcher_scan)
+        self._watcher.start()
 
     def _setup_ui(self):
         """Build the main UI layout."""
@@ -239,6 +263,10 @@ class MainWindow(QMainWindow):
         self._splitter.setSizes([200, 800])
 
         main_layout.addWidget(self._splitter, 1)
+
+        # --- Audio visualizer (hidden by default) ---
+        self._visualizer_panel = None
+        self._audio_analyzer = None
 
         # --- Player bar at bottom ---
         self._player_bar = self._build_player_bar()
@@ -586,6 +614,13 @@ class MainWindow(QMainWindow):
         act_pod_refresh.setToolTip(T('podcast_refresh_tip'))
         act_pod_refresh.triggered.connect(self._on_podcast_refresh)
 
+        view_menu.addSeparator()
+
+        act_visualizer = view_menu.addAction(T('visualizer'))
+        act_visualizer.setToolTip(T('visualizer_tip'))
+        act_visualizer.setShortcut(QKeySequence('Ctrl+V'))
+        act_visualizer.triggered.connect(self._toggle_visualizer)
+
         # Tools menu
         tools_menu = menubar.addMenu(T('menu_tools'))
 
@@ -624,6 +659,18 @@ class MainWindow(QMainWindow):
         act_reset_counts = tools_menu.addAction(T('reset_play_counts'))
         act_reset_counts.setToolTip(T('reset_play_counts_tip'))
         act_reset_counts.triggered.connect(self._on_reset_play_counts)
+
+        tools_menu.addSeparator()
+
+        act_classify = tools_menu.addAction(T('classify_library'))
+        act_classify.setToolTip(T('classify_library_tip'))
+        act_classify.triggered.connect(self._on_classify_library)
+
+        tools_menu.addSeparator()
+
+        act_organize = tools_menu.addAction(T('organize_library'))
+        act_organize.setToolTip(T('organize_library_tip'))
+        act_organize.triggered.connect(self._on_organize_library)
 
         tools_menu.addSeparator()
 
@@ -1118,11 +1165,11 @@ class MainWindow(QMainWindow):
         else:
             self._quality_label.hide()
 
-        # Record play count for previous track if listened >= 30 seconds
+        # Record play count for previous track if listened long enough
         import time as _time
         prev_path = getattr(self, '_playing_track_path', None)
         prev_start = getattr(self, '_playing_track_start', 0)
-        if prev_path and (_time.time() - prev_start) >= 30:
+        if prev_path and (_time.time() - prev_start) >= PLAY_COUNT_THRESHOLD_S:
             db.execute(
                 "UPDATE tracks SET play_count = play_count + 1, last_played = datetime('now') WHERE file_path = ?",
                 (prev_path,), commit=True
@@ -1344,11 +1391,8 @@ class MainWindow(QMainWindow):
 
     def _on_about(self):
         """Show about dialog."""
-        try:
-            version_file = Path(__file__).parent / 'VERSION'
-            version = version_file.read_text().strip() if version_file.exists() else '?'
-        except Exception:
-            version = '?'
+        from musicotheque import VERSION
+        version = VERSION
 
         QMessageBox.about(
             self,
@@ -1448,8 +1492,9 @@ class MainWindow(QMainWindow):
             self._refresh_playlists_sidebar()
 
     def _show_track_info(self, track):
-        """Show track information dialog."""
+        """Show track information dialog with classification."""
         import html as html_mod
+        from music_classifier import classify_track as _classify
         esc = html_mod.escape
         info_parts = [
             f"<b>{T('col_title')}:</b> {esc(str(track.get('title', '')))}",
@@ -1462,8 +1507,29 @@ class MainWindow(QMainWindow):
             f"<b>{T('col_bitrate')}:</b> {format_bitrate(track.get('bitrate', 0))}",
             f"<b>{T('col_year')}:</b> {esc(str(track.get('year', '')))}",
             f"<b>{T('col_genre')}:</b> {esc(str(track.get('genre', '')))}",
-            f"<b>Path:</b> {esc(str(track.get('file_path', '')))}",
         ]
+
+        # Classification
+        cl = _classify(
+            title=str(track.get('title', '')),
+            composer=str(track.get('composer', '')),
+            genre=str(track.get('genre', '')),
+            album=str(track.get('album_title', '')),
+            year=track.get('year'),
+        )
+        info_parts.append('<br><b>--- ' + T('classification') + ' ---</b>')
+        if cl['period']:
+            info_parts.append(f"<b>{T('period')}:</b> {esc(cl['period'])}")
+        if cl['form']:
+            info_parts.append(f"<b>{T('form')}:</b> {esc(cl['form'])}")
+        if cl['catalogue']:
+            info_parts.append(f"<b>{T('catalogue_num')}:</b> {esc(cl['catalogue'])}")
+        if cl['key']:
+            info_parts.append(f"<b>{T('musical_key')}:</b> {esc(cl['key'])}")
+        if cl['instruments']:
+            info_parts.append(f"<b>{T('instruments')}:</b> {esc(', '.join(cl['instruments']))}")
+
+        info_parts.append(f"<br><b>Path:</b> {esc(str(track.get('file_path', '')))}")
         QMessageBox.information(self, T('track_info'), '<br>'.join(info_parts))
 
     def _show_in_explorer(self, track):
@@ -1479,13 +1545,37 @@ class MainWindow(QMainWindow):
         else:
             subprocess.Popen(['xdg-open', folder])
 
+    # --- Watcher handlers ---
+
+    def _on_watcher_changes(self, added, modified, removed):
+        """Handle library changes detected by file watcher."""
+        msg = T('watcher_changes', added=added, modified=modified, removed=removed)
+        self._status_bar.showMessage(msg, 8000)
+        log.info("Watcher: +%d ~%d -%d", added, modified, removed)
+
+    def _on_watcher_relocated(self, old_prefix, new_prefix, count):
+        """Handle automatic path relocation."""
+        msg = T('watcher_relocated', count=count, old=old_prefix, new=new_prefix)
+        self._status_bar.showMessage(msg, 10000)
+        self._refresh_library()
+
+    def _on_watcher_scan(self, folders):
+        """Handle scan request from watcher."""
+        self._start_scan(folders)
+
     # --- Tools actions ---
 
     def _auto_backup(self):
-        """Periodic auto-backup."""
-        from musicotheque import DB_PATH, BACKUP_DIR
-        backup_database(str(DB_PATH), str(BACKUP_DIR), label='auto')
-        log.debug("Auto-backup completed")
+        """Periodic auto-backup (transparent, every 5 min)."""
+        import threading
+        def _bg_backup():
+            try:
+                from musicotheque import DB_PATH, BACKUP_DIR
+                backup_database(str(DB_PATH), str(BACKUP_DIR), label='auto')
+                log.debug("Auto-backup completed")
+            except Exception as e:
+                log.warning("Auto-backup failed: %s", e)
+        threading.Thread(target=_bg_backup, daemon=True).start()
 
     def _on_backup(self):
         """Manual backup."""
@@ -1501,7 +1591,7 @@ class MainWindow(QMainWindow):
         from musicotheque import DB_PATH, BACKUP_DIR
         backups = list_backups(str(BACKUP_DIR))
         if not backups:
-            self._status_bar.showMessage("No backups found", 3000)
+            self._status_bar.showMessage(T('no_backups_found'), 3000)
             return
 
         items = [f"{b['name']} ({b['date']}, {b['size']//1024} KB)" for b in backups]
@@ -1552,7 +1642,8 @@ class MainWindow(QMainWindow):
         def _check():
             try:
                 broken = db.find_broken_paths()
-            except Exception:
+            except Exception as e:
+                log.warning("Broken paths check failed: %s", e)
                 broken = []
             finally:
                 db.close_connection()
@@ -1634,27 +1725,27 @@ class MainWindow(QMainWindow):
         def _check():
             try:
                 import requests
+                from musicotheque import VERSION as _ver
                 resp = requests.get(
                     'https://api.github.com/repos/ARP273-ROSE/musicotheque/releases/latest',
-                    timeout=5, headers={'User-Agent': 'MusicOtheque/2.0.0'}
+                    timeout=5, headers={'User-Agent': f'MusicOtheque/{_ver}'}
                 )
                 if resp.status_code == 200:
                     data = resp.json()
                     remote = data.get('tag_name', '').lstrip('v')
-                    version_file = Path(__file__).parent / 'VERSION'
-                    current = version_file.read_text().strip() if version_file.exists() else '?'
+                    current = _ver
                     if remote and remote != current:
                         # Use QTimer to show dialog on main thread
                         QTimer.singleShot(0, lambda: QMessageBox.information(
                             self, T('check_updates'),
-                            f"Update available: {current} -> {remote}"
+                            T('update_available', current=current, remote=remote)
                         ))
                     else:
-                        QTimer.singleShot(0, lambda: self._status_bar.showMessage("Up to date", 3000))
+                        QTimer.singleShot(0, lambda: self._status_bar.showMessage(T('up_to_date'), 3000))
                 else:
-                    QTimer.singleShot(0, lambda: self._status_bar.showMessage("No releases found", 3000))
+                    QTimer.singleShot(0, lambda: self._status_bar.showMessage(T('no_releases_found'), 3000))
             except Exception as e:
-                QTimer.singleShot(0, lambda: self._status_bar.showMessage(f"Update check failed: {e}", 3000))
+                QTimer.singleShot(0, lambda: self._status_bar.showMessage(f"{T('update_check_failed')}: {e}", 3000))
 
         threading.Thread(target=_check, daemon=True).start()
 
@@ -1755,7 +1846,7 @@ class MainWindow(QMainWindow):
                 QTimer.singleShot(0, lambda: self._on_podcast_search_done(results))
             except Exception as e:
                 from PyQt6.QtCore import QTimer
-                QTimer.singleShot(0, lambda: self._status_bar.showMessage(f"Search error: {e}", 5000))
+                QTimer.singleShot(0, lambda: self._status_bar.showMessage(f"{T('search_error')}: {e}", 5000))
 
         threading.Thread(target=_search, daemon=True).start()
 
@@ -1780,7 +1871,7 @@ class MainWindow(QMainWindow):
         """Refresh all podcast feeds (in background thread)."""
         podcasts = db.fetchall("SELECT id, feed_url, title FROM podcasts WHERE feed_url IS NOT NULL")
         if not podcasts:
-            self._status_bar.showMessage("No podcast subscriptions", 3000)
+            self._status_bar.showMessage(T('no_podcast_subs'), 3000)
             return
 
         # Run in background thread to avoid blocking UI
@@ -1854,7 +1945,7 @@ class MainWindow(QMainWindow):
         try:
             from cd_ripper import detect_cd_drives, CDRipWorker
         except ImportError:
-            self._status_bar.showMessage("CD ripper module not available", 3000)
+            self._status_bar.showMessage(T('cd_ripper_unavailable'), 3000)
             return
 
         drives = detect_cd_drives()
@@ -1916,7 +2007,7 @@ class MainWindow(QMainWindow):
         try:
             from harmonizer import HarmonizeWorker
         except ImportError:
-            self._status_bar.showMessage("Harmonizer module not available", 3000)
+            self._status_bar.showMessage(T('harmonizer_unavailable'), 3000)
             return
 
         # Preview first
@@ -1949,7 +2040,7 @@ class MainWindow(QMainWindow):
         """Show harmonization preview and ask to apply."""
         self._progress_bar.hide()
         if not changes:
-            self._status_bar.showMessage("No changes needed", 5000)
+            self._status_bar.showMessage(T('no_changes_needed'), 5000)
             return
 
         # Show summary
@@ -2005,6 +2096,156 @@ class MainWindow(QMainWindow):
         )
         self._refresh_library()
 
+    # --- Classification ---
+
+    def _on_organize_library(self):
+        """Organize music files into Artist/Album/Track folder structure."""
+        stats = db.get_library_stats()
+        count = stats['tracks']
+        if count == 0:
+            self._status_bar.showMessage(T('no_changes_needed'), 3000)
+            return
+
+        dest = QFileDialog.getExistingDirectory(
+            self, T('organize_library'), '',
+            QFileDialog.Option.ShowDirsOnly
+        )
+        if not dest:
+            return
+
+        # Confirm
+        reply = QMessageBox.question(
+            self, T('organize_library'),
+            T('organize_confirm', count=count, dest=dest),
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+        )
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+
+        from file_organizer import FileOrganizer
+        self._organize_worker = FileOrganizer(dest)
+        self._organize_thread = QThread()
+        self._organize_worker.moveToThread(self._organize_thread)
+        self._organize_thread.started.connect(self._organize_worker.run)
+        self._organize_worker.progress.connect(
+            lambda c, t, f: self._status_bar.showMessage(T('organize_running', current=c, total=t))
+        )
+        self._organize_worker.finished.connect(
+            lambda moved, errs: (
+                self._status_bar.showMessage(T('organize_done', count=moved), 10000),
+                self._refresh_library(),
+                self._organize_thread.quit()
+            )
+        )
+        self._organize_worker.error.connect(
+            lambda msg: (self._status_bar.showMessage(f"Error: {msg}", 5000),
+                         self._organize_thread.quit())
+        )
+        self._organize_thread.start()
+
+    def _on_classify_library(self):
+        """Classify all tracks by musical period, form, and instrumentation."""
+        from music_classifier import classify_track as _classify
+        import html as html_mod
+        esc = html_mod.escape
+
+        tracks = db.fetchall(
+            "SELECT t.title, t.composer, t.genre, t.year, "
+            "a.title as album_title, ar.name as artist_name "
+            "FROM tracks t "
+            "LEFT JOIN albums a ON t.album_id = a.id "
+            "LEFT JOIN artists ar ON t.artist_id = ar.id"
+        )
+
+        if not tracks:
+            self._status_bar.showMessage(T('no_results'), 3000)
+            return
+
+        # Classify all tracks
+        period_counts = {}
+        form_counts = {}
+        classified = 0
+
+        for t in tracks:
+            cl = _classify(
+                title=str(t.get('title', '') or ''),
+                composer=str(t.get('composer', '') or ''),
+                genre=str(t.get('genre', '') or ''),
+                album=str(t.get('album_title', '') or ''),
+                year=t.get('year'),
+            )
+            if cl['period'] or cl['form']:
+                classified += 1
+            if cl['period']:
+                period_counts[cl['period']] = period_counts.get(cl['period'], 0) + 1
+            if cl['form']:
+                form_counts[cl['form']] = form_counts.get(cl['form'], 0) + 1
+
+        # Build results dialog
+        html = [f"<h3>{T('classify_library')}</h3>"]
+        html.append(f"<p>{T('classify_done', count=classified)} / {len(tracks)}</p>")
+
+        if period_counts:
+            html.append(f"<h4>{T('period')}</h4><table>")
+            for period, count in sorted(period_counts.items(),
+                                         key=lambda x: x[1], reverse=True):
+                pct = count * 100 // len(tracks)
+                html.append(f"<tr><td><b>{esc(period)}</b></td>"
+                           f"<td align='right'>{count}</td>"
+                           f"<td align='right'>{pct}%</td></tr>")
+            html.append("</table>")
+
+        if form_counts:
+            html.append(f"<h4>{T('form')}</h4><table>")
+            for form, count in sorted(form_counts.items(),
+                                       key=lambda x: x[1], reverse=True)[:20]:
+                html.append(f"<tr><td><b>{esc(form)}</b></td>"
+                           f"<td align='right'>{count}</td></tr>")
+            html.append("</table>")
+
+        dlg = QDialog(self)
+        dlg.setWindowTitle(T('classify_library'))
+        dlg.setMinimumSize(450, 400)
+        layout = QVBoxLayout(dlg)
+        browser = QTextBrowser()
+        browser.setHtml('\n'.join(html))
+        layout.addWidget(browser)
+        btn = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok)
+        btn.accepted.connect(dlg.accept)
+        layout.addWidget(btn)
+        dlg.exec()
+
+    # --- Audio Visualizer ---
+
+    def _toggle_visualizer(self):
+        """Show/hide the audio visualizer panel."""
+        if self._visualizer_panel and self._visualizer_panel.isVisible():
+            self._visualizer_panel.stop()
+            self._visualizer_panel.hide()
+            return
+
+        # Lazy initialization
+        if not self._audio_analyzer:
+            from audio_visualizer import AudioAnalyzer, VisualizerPanel
+            self._audio_analyzer = AudioAnalyzer()
+            self._visualizer_panel = VisualizerPanel(self._audio_analyzer, self)
+            self._visualizer_panel.closed.connect(
+                lambda: self._visualizer_panel.hide()
+            )
+            self._visualizer_panel.setFixedHeight(160)
+
+            # Connect player audio buffer to analyzer
+            self._player.audio_buffer_ready.connect(self._audio_analyzer.feed)
+
+            # Insert into layout before player bar
+            central_layout = self.centralWidget().layout()
+            # Insert before last 2 items (player bar + status bar)
+            idx = central_layout.count() - 2
+            central_layout.insertWidget(idx, self._visualizer_panel)
+
+        self._visualizer_panel.show()
+        self._visualizer_panel.start()
+
     # --- Statistics ---
 
     def _on_show_stats(self):
@@ -2036,15 +2277,17 @@ class MainWindow(QMainWindow):
         import time as _time
         prev_path = getattr(self, '_playing_track_path', None)
         prev_start = getattr(self, '_playing_track_start', 0)
-        if prev_path and (_time.time() - prev_start) >= 30:
+        if prev_path and (_time.time() - prev_start) >= PLAY_COUNT_THRESHOLD_S:
             db.execute(
                 "UPDATE tracks SET play_count = play_count + 1, last_played = datetime('now') WHERE file_path = ?",
                 (prev_path,), commit=True
             )
 
-        # Stop playback
+        # Stop playback and watcher
         self._player.stop()
         self._backup_timer.stop()
+        if hasattr(self, '_watcher'):
+            self._watcher.stop()
 
         # Cancel all workers
         for worker_attr in ('_scan_worker', '_import_worker', '_fetch_worker',
@@ -2055,7 +2298,7 @@ class MainWindow(QMainWindow):
             if worker and hasattr(worker, 'cancel'):
                 worker.cancel()
 
-        # Wait for all threads to finish
+        # Wait for all threads to finish (5s timeout, then terminate)
         for thread_attr in ('_scan_thread', '_import_thread', '_fetch_thread',
                             '_harmonize_thread', '_cd_thread',
                             '_podcast_thread', '_podcast_import_thread',
@@ -2063,14 +2306,17 @@ class MainWindow(QMainWindow):
             thread = getattr(self, thread_attr, None)
             if thread and thread.isRunning():
                 thread.quit()
-                thread.wait(2000)
+                if not thread.wait(5000):
+                    log.warning("Thread %s did not stop, terminating", thread_attr)
+                    thread.terminate()
+                    thread.wait(1000)
 
         # Backup on exit
         try:
             from musicotheque import DB_PATH, BACKUP_DIR
             backup_database(str(DB_PATH), str(BACKUP_DIR), label='exit')
-        except Exception:
-            pass
+        except Exception as e:
+            log.warning("Exit backup failed: %s", e)
 
         db.close_connection()
         event.accept()
@@ -2289,7 +2535,43 @@ class HelpDialog(QDialog):
         <li><b>Export Library</b> — Export all metadata to portable JSON format</li>
         <li><b>Reset Play Counts</b> — Reset all play counts and last-played dates
         for privacy. Individual tracks can also be reset via right-click context menu.</li>
+        <li><b>Classify Library</b> — Automatic classification of all tracks by musical
+        period, form/genre, catalogue number, instrumentation, and key. Especially useful
+        for classical music collections. The classifier recognizes 200+ composers across all
+        periods (Medieval to Contemporary), 60+ musical forms (Symphony, Concerto, Sonata,
+        Fugue, Nocturne, Opera, etc.), catalogue numbers (BWV, K., Op., D., RV, HWV...),
+        and instruments. Classification also appears in the track details dialog (right-click
+        → Track Info).</li>
+        <li><b>Organize Files on Disk</b> — Sort music files into a clean Artist / Album / Track
+        folder structure. Files are moved and database paths are updated automatically.</li>
         </ul>
+
+        <h3>Audio Visualizer (Ctrl+V)</h3>
+        <p><b>View → Audio Visualizer</b> — Real-time audio visualization during playback:</p>
+        <ul>
+        <li><b>Spectrum Analyzer</b> — 64-bar frequency display with peak hold and smooth decay.
+        Colors: green (low) → yellow (mid) → red (high). Updated at 20 fps.</li>
+        <li><b>VU Meter</b> — Stereo RMS level meter with peak indicators and dB scale
+        (-60 to 0 dB). Updated at 15 fps.</li>
+        <li><b>Spectrogram</b> — Waterfall frequency display showing frequency content over time.
+        Heat-map coloring from black (silence) to white (loud). Updated at 12 fps.</li>
+        </ul>
+        <p>Uses QAudioBufferOutput for zero-copy PCM access — no external audio capture needed.
+        Total CPU usage &lt; 4%. Toggle on/off anytime with Ctrl+V.</p>
+
+        <h3>Music Classification</h3>
+        <p><b>Tools → Classify Library</b> — Automatic classification of your tracks:</p>
+        <ul>
+        <li><b>Musical period</b> — 200+ composers mapped to Medieval, Renaissance, Baroque,
+        Classical, Romantic, Modern, Contemporary periods</li>
+        <li><b>Musical form</b> — 60+ forms detected: Symphony, Concerto, Sonata, Fugue,
+        Nocturne, Opera, Requiem, String Quartet, etc.</li>
+        <li><b>Catalogue number</b> — BWV (Bach), K. (Mozart), Op., D. (Schubert),
+        RV (Vivaldi), HWV (Handel), and more</li>
+        <li><b>Instrumentation</b> — Piano, Violin, Orchestra, Chamber, Choir, etc.</li>
+        <li><b>Key</b> — e.g., "C minor", "E♭ major"</li>
+        </ul>
+        <p>Right-click any track → Track Info to see individual classification details.</p>
 
         <h3>Audio Quality Indicators</h3>
         <ul>
@@ -2299,15 +2581,26 @@ class HelpDialog(QDialog):
         <li><span style="color:#ff8"><b>Lossy</b></span> — MP3, AAC, OGG, Opus, WMA</li>
         </ul>
 
+        <h3>File Organizer</h3>
+        <p><b>Tools → Organize Files on Disk</b> — Sorts all music files into a clean
+        <code>Artist / Album / Track</code> folder structure. Files are MOVED (not copied).
+        Database paths are updated automatically. Safe filename sanitization for all platforms.</p>
+
+        <h3>Library Watcher</h3>
+        <p>MusicOthèque automatically monitors your scan folders for changes (new files,
+        modifications, deletions). When changes are detected, a background re-scan is triggered.
+        If a drive letter changes (e.g., P: becomes Q:), paths are auto-relocated transparently.</p>
+
         <h3>Data Safety</h3>
-        <p>Auto-backup every 30 minutes and on application exit. Backup rotation keeps
-        5 recent daily backups + 4 weekly. All database writes use SQLite WAL mode with
-        thread-safe locking. Atomic saves (write-tmp-then-rename) prevent corruption.</p>
+        <p>Continuous auto-backup every 5 minutes (background thread, transparent). Additional
+        backup on application exit. Backup rotation keeps 5 recent daily + 4 weekly. All database
+        writes use SQLite WAL mode with thread-safe locking. Atomic saves prevent corruption.</p>
 
         <h3>Cross-Platform</h3>
         <p>Works on Windows, Linux, and macOS. Data is stored in the OS-appropriate
         location (APPDATA / XDG_DATA_HOME / Library). Use <b>Tools → Relocate Paths</b>
-        when opening the same library on a different OS.</p>
+        when opening the same library on a different OS. Automatic path relocation on drive
+        letter changes.</p>
 
         <h3>Keyboard Shortcuts</h3>
         <table border="0" cellpadding="4">
@@ -2320,6 +2613,7 @@ class HelpDialog(QDialog):
         <tr><td><b>Ctrl+F</b></td><td>Focus search bar</td></tr>
         <tr><td><b>F5</b></td><td>Rescan all folders</td></tr>
         <tr><td><b>Ctrl+R</b></td><td>Smart Radio</td></tr>
+        <tr><td><b>Ctrl+V</b></td><td>Audio Visualizer</td></tr>
         <tr><td><b>Ctrl+I</b></td><td>Library Statistics</td></tr>
         <tr><td><b>Ctrl+,</b></td><td>Settings</td></tr>
         <tr><td><b>Ctrl+Q</b></td><td>Quit</td></tr>
@@ -2439,7 +2733,44 @@ class HelpDialog(QDialog):
         <li><b>Exporter la bibliothèque</b> — Exporter toutes les métadonnées en JSON portable</li>
         <li><b>Réinitialiser les compteurs</b> — Remet à zéro tous les compteurs de lecture
         et dates pour l'anonymat. Réinitialisation individuelle via clic droit sur une piste.</li>
+        <li><b>Classifier la bibliothèque</b> — Classification automatique de toutes les pistes
+        par période musicale, forme/genre, numéro de catalogue, instrumentation et tonalité.
+        Particulièrement utile pour les collections de musique classique. Le classifieur
+        reconnaît 200+ compositeurs de toutes les époques (Médiéval à Contemporain), 60+
+        formes musicales (Symphonie, Concerto, Sonate, Fugue, Nocturne, Opéra, etc.),
+        numéros de catalogue (BWV, K., Op., D., RV, HWV...) et instruments. La classification
+        apparaît aussi dans les détails de la piste (clic droit → Informations).</li>
+        <li><b>Organiser les fichiers</b> — Trie vos fichiers musicaux dans une structure
+        propre Artiste / Album / Piste. Les fichiers sont déplacés et la base mise à jour.</li>
         </ul>
+
+        <h3>Visualiseur Audio (Ctrl+V)</h3>
+        <p><b>Affichage → Visualiseur audio</b> — Visualisation audio en temps réel pendant la lecture :</p>
+        <ul>
+        <li><b>Analyseur spectral</b> — 64 barres de fréquences avec pic et décroissance.
+        Couleurs : vert (bas) → jaune (milieu) → rouge (haut). Rafraîchi à 20 fps.</li>
+        <li><b>VU-mètre</b> — Niveau RMS stéréo avec indicateurs de pic et échelle dB
+        (-60 à 0 dB). Rafraîchi à 15 fps.</li>
+        <li><b>Spectrogramme</b> — Affichage en cascade montrant le contenu fréquentiel au fil du temps.
+        Colorisation thermique du noir (silence) au blanc (fort). Rafraîchi à 12 fps.</li>
+        </ul>
+        <p>Utilise QAudioBufferOutput pour l'accès direct aux données PCM — aucune capture
+        audio externe nécessaire. Utilisation CPU totale &lt; 4%. Activer/désactiver à tout moment
+        avec Ctrl+V.</p>
+
+        <h3>Classification Musicale</h3>
+        <p><b>Outils → Classifier la bibliothèque</b> — Classification automatique de vos pistes :</p>
+        <ul>
+        <li><b>Période musicale</b> — 200+ compositeurs classés par époque : Médiéval,
+        Renaissance, Baroque, Classique, Romantique, Moderne, Contemporain</li>
+        <li><b>Forme musicale</b> — 60+ formes détectées : Symphonie, Concerto, Sonate, Fugue,
+        Nocturne, Opéra, Requiem, Quatuor à cordes, etc.</li>
+        <li><b>Numéro de catalogue</b> — BWV (Bach), K. (Mozart), Op., D. (Schubert),
+        RV (Vivaldi), HWV (Händel), et plus</li>
+        <li><b>Instrumentation</b> — Piano, Violon, Orchestre, Musique de chambre, Chœur, etc.</li>
+        <li><b>Tonalité</b> — ex. « Do mineur », « Mi♭ majeur »</li>
+        </ul>
+        <p>Clic droit sur une piste → Informations pour voir la classification individuelle.</p>
 
         <h3>Indicateurs Qualité Audio</h3>
         <ul>
@@ -2449,16 +2780,28 @@ class HelpDialog(QDialog):
         <li><span style="color:#ff8"><b>Avec perte</b></span> — MP3, AAC, OGG, Opus, WMA</li>
         </ul>
 
+        <h3>Organisateur de fichiers</h3>
+        <p><b>Outils → Organiser les fichiers sur le disque</b> — Trie tous les fichiers dans une
+        structure propre <code>Artiste / Album / Piste</code>. Les fichiers sont DÉPLACÉS (pas copiés).
+        Les chemins en base sont mis à jour automatiquement. Noms de fichiers assainis pour toutes les plateformes.</p>
+
+        <h3>Surveillance de la bibliothèque</h3>
+        <p>MusicOthèque surveille automatiquement vos dossiers de scan pour détecter les changements
+        (nouveaux fichiers, modifications, suppressions). Un re-scan en arrière-plan est déclenché
+        automatiquement. Si une lettre de lecteur change (ex. P: devient Q:), les chemins sont
+        relocalisés automatiquement et de manière transparente.</p>
+
         <h3>Sécurité des Données</h3>
-        <p>Sauvegarde automatique toutes les 30 minutes et à la fermeture. La rotation
-        garde 5 sauvegardes quotidiennes récentes + 4 hebdomadaires. Toutes les écritures
-        utilisent SQLite WAL avec verrouillage thread-safe. Sauvegardes atomiques
-        (écriture-tmp-puis-renommage) pour éviter la corruption.</p>
+        <p>Sauvegarde continue automatique toutes les 5 minutes (thread en arrière-plan, transparente).
+        Sauvegarde supplémentaire à la fermeture. La rotation garde 5 sauvegardes quotidiennes
+        récentes + 4 hebdomadaires. Toutes les écritures utilisent SQLite WAL avec verrouillage
+        thread-safe. Sauvegardes atomiques pour éviter la corruption.</p>
 
         <h3>Multi-Plateforme</h3>
         <p>Fonctionne sur Windows, Linux et macOS. Les données sont stockées dans le
         répertoire approprié au système (APPDATA / XDG_DATA_HOME / Library). Utilisez
-        <b>Outils → Déplacer les chemins</b> pour ouvrir la même bibliothèque sur un autre OS.</p>
+        <b>Outils → Déplacer les chemins</b> pour ouvrir la même bibliothèque sur un autre OS.
+        Relocalisation automatique des chemins lors des changements de lettre de lecteur.</p>
 
         <h3>Raccourcis Clavier</h3>
         <table border="0" cellpadding="4">
@@ -2471,6 +2814,7 @@ class HelpDialog(QDialog):
         <tr><td><b>Ctrl+F</b></td><td>Barre de recherche</td></tr>
         <tr><td><b>F5</b></td><td>Rescanner tous les dossiers</td></tr>
         <tr><td><b>Ctrl+R</b></td><td>Radio intelligente</td></tr>
+        <tr><td><b>Ctrl+V</b></td><td>Visualiseur audio</td></tr>
         <tr><td><b>Ctrl+I</b></td><td>Statistiques</td></tr>
         <tr><td><b>Ctrl+,</b></td><td>Paramètres</td></tr>
         <tr><td><b>Ctrl+Q</b></td><td>Quitter</td></tr>

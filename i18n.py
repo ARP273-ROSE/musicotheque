@@ -349,6 +349,53 @@ TX = {
     'reset_play_counts_done': {'en': 'Play counts reset for {count} tracks', 'fr': 'Compteurs réinitialisés pour {count} pistes'},
     'reset_play_count': {'en': 'Reset Play Count', 'fr': 'Réinitialiser le compteur'},
     'reset_play_count_done': {'en': 'Play count reset', 'fr': 'Compteur réinitialisé'},
+
+    # Status messages
+    'no_backups_found': {'en': 'No backups found', 'fr': 'Aucune sauvegarde trouvée'},
+    'up_to_date': {'en': 'Up to date', 'fr': 'À jour'},
+    'no_releases_found': {'en': 'No releases found', 'fr': 'Aucune version trouvée'},
+    'update_check_failed': {'en': 'Update check failed', 'fr': 'Échec de la vérification'},
+    'no_podcast_subs': {'en': 'No podcast subscriptions', 'fr': 'Aucun abonnement podcast'},
+    'cd_ripper_unavailable': {'en': 'CD ripper module not available', 'fr': 'Module CD non disponible'},
+    'harmonizer_unavailable': {'en': 'Harmonizer module not available', 'fr': 'Module harmoniseur non disponible'},
+    'no_changes_needed': {'en': 'No changes needed', 'fr': 'Aucune modification nécessaire'},
+    'update_available': {'en': 'Update available: {current} → {remote}', 'fr': 'Mise à jour disponible : {current} → {remote}'},
+    'search_error': {'en': 'Search error', 'fr': 'Erreur de recherche'},
+
+    # Music classification
+    'classify_library': {'en': 'Classify Library', 'fr': 'Classifier la bibliothèque'},
+    'classify_library_tip': {'en': 'Auto-classify tracks by musical period, form, and instrumentation', 'fr': 'Classifier automatiquement les pistes par période, forme et instrumentation'},
+    'classify_running': {'en': 'Classifying tracks...', 'fr': 'Classification en cours...'},
+    'classify_done': {'en': 'Classification complete: {count} tracks classified', 'fr': 'Classification terminée : {count} pistes classifiées'},
+    'period': {'en': 'Period', 'fr': 'Période'},
+    'form': {'en': 'Form', 'fr': 'Forme'},
+    'catalogue_num': {'en': 'Catalogue', 'fr': 'Catalogue'},
+    'instruments': {'en': 'Instruments', 'fr': 'Instruments'},
+    'musical_key': {'en': 'Key', 'fr': 'Tonalité'},
+    'track_details': {'en': 'Track Details', 'fr': 'Détails de la piste'},
+    'classification': {'en': 'Classification', 'fr': 'Classification'},
+
+    # Audio visualizer
+    'visualizer': {'en': 'Audio Visualizer', 'fr': 'Visualiseur audio'},
+    'visualizer_tip': {'en': 'Show spectrum analyzer, VU meter, and spectrogram (Ctrl+V)', 'fr': 'Afficher analyseur spectral, VU-mètre et spectrogramme (Ctrl+V)'},
+
+    # Library watcher
+    'watcher_changes': {'en': 'Library changes detected: {added} new, {modified} modified, {removed} removed',
+                        'fr': 'Changements détectés : {added} nouveaux, {modified} modifiés, {removed} supprimés'},
+    'watcher_relocated': {'en': 'Auto-relocated {count} tracks: {old} → {new}',
+                          'fr': 'Relocalisation auto de {count} pistes : {old} → {new}'},
+
+    # File organizer
+    'organize_library': {'en': 'Organize Files on Disk...', 'fr': 'Organiser les fichiers sur le disque...'},
+    'organize_library_tip': {'en': 'Sort music files into Artist/Album/Track folders', 'fr': 'Trier les fichiers dans des dossiers Artiste/Album/Piste'},
+    'organize_running': {'en': 'Organizing files: {current}/{total}...', 'fr': 'Organisation des fichiers : {current}/{total}...'},
+    'organize_done': {'en': 'Organized {count} files', 'fr': '{count} fichiers organisés'},
+    'organize_confirm': {'en': 'Organize {count} tracks into:\n{dest}\n\nStructure: Artist / Album / Track?\n\nThis will MOVE files. Continue?',
+                         'fr': 'Organiser {count} pistes dans :\n{dest}\n\nStructure : Artiste / Album / Piste ?\n\nCela va DÉPLACER les fichiers. Continuer ?'},
+
+    # Enrichment
+    'enrich_metadata': {'en': 'Enrich Metadata Online...', 'fr': 'Enrichir les métadonnées en ligne...'},
+    'enrich_metadata_tip': {'en': 'Fetch missing metadata and cover art from MusicBrainz', 'fr': 'Récupérer les métadonnées et pochettes manquantes depuis MusicBrainz'},
 }
 
 

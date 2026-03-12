@@ -80,6 +80,7 @@ CREATE INDEX IF NOT EXISTS idx_tracks_album ON tracks(album_id);
 CREATE INDEX IF NOT EXISTS idx_tracks_artist ON tracks(artist_id);
 CREATE INDEX IF NOT EXISTS idx_tracks_path ON tracks(file_path);
 CREATE INDEX IF NOT EXISTS idx_tracks_genre ON tracks(genre);
+CREATE INDEX IF NOT EXISTS idx_tracks_album_artist ON tracks(album_artist_id);
 
 CREATE TABLE IF NOT EXISTS playlists (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -329,14 +330,15 @@ def search_tracks(query, limit=200):
     try:
         return fetchall(sql, (f'"{safe_q}"*', limit))
     except sqlite3.OperationalError:
-        # Fallback to LIKE search
-        like = f"%{query}%"
+        # Fallback to LIKE search — escape wildcards in user input
+        escaped = query.replace('\\', '\\\\').replace('%', '\\%').replace('_', '\\_')
+        like = f"%{escaped}%"
         return fetchall("""
             SELECT t.*, a.name as artist_name, al.title as album_title, al.cover_data
             FROM tracks t
             LEFT JOIN artists a ON t.artist_id = a.id
             LEFT JOIN albums al ON t.album_id = al.id
-            WHERE t.title LIKE ? OR a.name LIKE ? OR al.title LIKE ?
+            WHERE t.title LIKE ? ESCAPE '\\' OR a.name LIKE ? ESCAPE '\\' OR al.title LIKE ? ESCAPE '\\'
             ORDER BY a.name, al.year, t.disc_number, t.track_number
             LIMIT ?
         """, (like, like, like, limit))
@@ -378,27 +380,27 @@ def get_or_create_album(title, artist_id, year=None, folder_path=None):
 
 
 def get_library_stats():
-    """Get library statistics."""
-    stats = {}
-    row = fetchone("SELECT COUNT(*) as c FROM tracks")
-    stats['tracks'] = row['c'] if row else 0
-    row = fetchone("SELECT COUNT(*) as c FROM albums")
-    stats['albums'] = row['c'] if row else 0
-    row = fetchone("SELECT COUNT(*) as c FROM artists")
-    stats['artists'] = row['c'] if row else 0
-    row = fetchone("SELECT SUM(duration_ms) as d FROM tracks")
-    stats['total_duration_ms'] = row['d'] or 0 if row else 0
-    row = fetchone("SELECT SUM(file_size) as s FROM tracks")
-    stats['total_size'] = row['s'] or 0 if row else 0
-    row = fetchone("SELECT COUNT(*) as c FROM playlists")
-    stats['playlists'] = row['c'] if row else 0
-    row = fetchone("SELECT COUNT(*) as c FROM podcasts")
-    stats['podcasts'] = row['c'] if row else 0
-    row = fetchone("SELECT COUNT(*) as c FROM podcast_episodes")
-    stats['episodes'] = row['c'] if row else 0
-    row = fetchone("SELECT COUNT(*) as c FROM podcast_episodes WHERE file_path IS NOT NULL")
-    stats['episodes_downloaded'] = row['c'] if row else 0
-    return stats
+    """Get library statistics (single query)."""
+    row = fetchone("""
+        SELECT
+            (SELECT COUNT(*) FROM tracks) as tracks,
+            (SELECT COUNT(*) FROM albums) as albums,
+            (SELECT COUNT(*) FROM artists) as artists,
+            (SELECT COALESCE(SUM(duration_ms), 0) FROM tracks) as total_duration_ms,
+            (SELECT COALESCE(SUM(file_size), 0) FROM tracks) as total_size,
+            (SELECT COUNT(*) FROM playlists) as playlists,
+            (SELECT COUNT(*) FROM podcasts) as podcasts,
+            (SELECT COUNT(*) FROM podcast_episodes) as episodes,
+            (SELECT COUNT(*) FROM podcast_episodes WHERE file_path IS NOT NULL) as episodes_downloaded
+    """)
+    if row:
+        return dict(row)
+    return {
+        'tracks': 0, 'albums': 0, 'artists': 0,
+        'total_duration_ms': 0, 'total_size': 0,
+        'playlists': 0, 'podcasts': 0, 'episodes': 0,
+        'episodes_downloaded': 0
+    }
 
 
 def get_or_create_podcast(title, feed_url=None, author=None):
@@ -432,12 +434,13 @@ def search_episodes(query, limit=200):
             ORDER BY rank LIMIT ?
         """, (f'"{safe_q}"*', limit))
     except Exception:
-        like = f"%{query}%"
+        escaped = query.replace('\\', '\\\\').replace('%', '\\%').replace('_', '\\_')
+        like = f"%{escaped}%"
         return fetchall("""
             SELECT e.*, p.title as podcast_title, p.image_data
             FROM podcast_episodes e
             LEFT JOIN podcasts p ON e.podcast_id = p.id
-            WHERE e.title LIKE ? OR p.title LIKE ?
+            WHERE e.title LIKE ? ESCAPE '\\' OR p.title LIKE ? ESCAPE '\\'
             ORDER BY e.published_at DESC LIMIT ?
         """, (like, like, limit))
 
