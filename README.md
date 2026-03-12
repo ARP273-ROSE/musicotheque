@@ -23,6 +23,16 @@
 - Playback queue with **shuffle** and **repeat** modes (off / all / one)
 - **Volume control** with mute toggle
 - **Smart play count**: tracks listened for at least 30 seconds (skipped tracks don't count)
+- **Reset play counts** for privacy (all tracks or individual via context menu)
+
+#### Smart Radio (Ctrl+R)
+- **Play random tracks** with intelligent, combinable filters
+- Filter by **genre**, **artist**, **composer**, **album** — all combinable
+- Filter by **era**: Medieval, Renaissance, Baroque, Classical, Romantic, Modern, Contemporary, Recent, or custom year range
+- Filter by **audio quality**: Hi-Res, CD Quality, Lossless, Lossy
+- Filter by **minimum rating** and **unplayed only**
+- **Live counter** shows matching tracks, with optional track limit
+- All filters combine with AND logic for precise selection
 
 #### Podcast Manager
 - **Subscribe** to podcasts by RSS feed URL
@@ -30,6 +40,15 @@
 - **Download episodes** for offline listening
 - Browse shows and episodes with playback position tracking
 - **iTunes podcast import** from Library XML
+
+#### Web Radio
+- **30+ curated internet radio stations** from around the world
+- **Classical music**: France Musique (8 channels), Radio Classique, BBC Radio 3, Rai Radio 3 Classica, RTS Espace 2, WQXR, BR-Klassik, Concertzender, ABC Classic
+- **Culture**: France Culture, France Inter
+- **News**: Franceinfo, BBC World Service, NPR (WNYC)
+- **Eclectic**: FIP and 7 themed channels (Rock, Jazz, Electro, World, Groove, Pop, Nouveautés)
+- Live streaming with LIVE badge in player bar
+- Browse by category in sidebar
 
 #### CD Audio Import
 - **Rip audio CDs** to FLAC format
@@ -148,6 +167,7 @@ python musicotheque.py
 | `Ctrl+O` | Add folder |
 | `Ctrl+F` | Search |
 | `F5` | Rescan library |
+| `Ctrl+R` | Smart Radio |
 | `Ctrl+I` | Library Statistics |
 | `Ctrl+,` | Settings |
 | `Ctrl+Q` | Quit |
@@ -171,6 +191,7 @@ python musicotheque.py
 | `cd_ripper.py` | CD drive detection, ffmpeg ripping, MusicBrainz lookup |
 | `harmonizer.py` | Metadata normalization (artists, composers, albums, genres) |
 | `backup_manager.py` | Auto-backup with rotation and atomic restore |
+| `web_radio.py` | 30+ curated internet radio stations with streaming URLs |
 
 ### Data Location
 

@@ -33,6 +33,8 @@ from metadata_fetch import MetadataFetchWorker
 from backup_manager import backup_database, restore_database, list_backups
 from podcast_manager import (PodcastDownloadWorker, PodcastSubscribeWorker,
                               parse_rss_feed, search_podcasts)
+from web_radio import (RADIO_STATIONS, CATEGORIES, get_stations_by_category,
+                        station_display_name)
 
 log = logging.getLogger(__name__)
 
@@ -302,6 +304,25 @@ class MainWindow(QMainWindow):
 
         self._refresh_podcasts_sidebar()
 
+        # Web Radio section
+        self._radio_root = QTreeWidgetItem(self._sidebar, [T('web_radio')])
+        self._radio_root.setExpanded(False)
+        self._radio_root.setToolTip(0, T('web_radio_tip'))
+        font_radio = self._radio_root.font(0)
+        font_radio.setBold(True)
+        self._radio_root.setFont(0, font_radio)
+
+        for cat_id, cat_key in CATEGORIES:
+            stations = get_stations_by_category(cat_id)
+            if not stations:
+                continue
+            cat_item = QTreeWidgetItem(self._radio_root, [T(cat_key)])
+            cat_item.setExpanded(False)
+            for station in stations:
+                s_item = QTreeWidgetItem(cat_item, [station_display_name(station)])
+                s_item.setData(0, Qt.ItemDataRole.UserRole, f"radio:{station['url']}")
+                s_item.setToolTip(0, f"{station['name']} ({station['country']})")
+
     def _refresh_playlists_sidebar(self):
         """Refresh playlists in sidebar."""
         # Remove old playlist items
@@ -529,6 +550,13 @@ class MainWindow(QMainWindow):
 
         play_menu.addSeparator()
 
+        act_radio = play_menu.addAction(T('smart_radio'))
+        act_radio.setToolTip(T('smart_radio_tip'))
+        act_radio.setShortcut(QKeySequence('Ctrl+R'))
+        act_radio.triggered.connect(self._on_smart_radio)
+
+        play_menu.addSeparator()
+
         act_vol_up = play_menu.addAction(T('volume') + ' +')
         act_vol_up.setShortcut(QKeySequence('Ctrl+Up'))
         act_vol_up.triggered.connect(lambda: self._player.set_volume(self._player.volume + 5))
@@ -593,6 +621,12 @@ class MainWindow(QMainWindow):
 
         tools_menu.addSeparator()
 
+        act_reset_counts = tools_menu.addAction(T('reset_play_counts'))
+        act_reset_counts.setToolTip(T('reset_play_counts_tip'))
+        act_reset_counts.triggered.connect(self._on_reset_play_counts)
+
+        tools_menu.addSeparator()
+
         act_stats = tools_menu.addAction(T('stats_menu'))
         act_stats.setToolTip(T('stats_menu_tip'))
         act_stats.setShortcut(QKeySequence('Ctrl+I'))
@@ -626,6 +660,7 @@ class MainWindow(QMainWindow):
         self._player.volume_changed.connect(self._on_volume_changed)
         self._player.repeat_changed.connect(self._on_repeat_changed)
         self._player.shuffle_changed.connect(self._on_shuffle_changed)
+        self._player.radio_changed.connect(self._on_radio_changed)
         self._player.error_occurred.connect(
             lambda msg: self._status_bar.showMessage(f"Error: {msg}", 5000)
         )
@@ -945,6 +980,15 @@ class MainWindow(QMainWindow):
         if not view_id:
             return
 
+        # Web radio station
+        if str(view_id).startswith('radio:'):
+            stream_url = str(view_id)[6:]  # Remove 'radio:' prefix
+            from web_radio import find_station_by_url
+            station = find_station_by_url(stream_url)
+            if station:
+                self._player.play_stream(station)
+            return
+
         if ':' in str(view_id) and not view_id.startswith('playlist:'):
             parts = view_id.split(':', 1)
             self._load_view(parts[0], parts[1] if len(parts) > 1 else None)
@@ -1005,12 +1049,16 @@ class MainWindow(QMainWindow):
 
     def _on_position(self, pos):
         """Update seek slider and time label."""
+        if self._player.is_streaming:
+            return  # No seek on live streams
         if not self._seek_slider.isSliderDown():
             self._seek_slider.setValue(pos)
         self._position_label.setText(format_duration(pos))
 
     def _on_duration(self, dur):
         """Update duration display."""
+        if self._player.is_streaming:
+            return  # No duration on live streams
         self._seek_slider.setRange(0, dur)
         self._duration_label.setText(format_duration(dur))
 
@@ -1083,6 +1131,42 @@ class MainWindow(QMainWindow):
         # Track start time for play count threshold
         self._playing_track_path = track.get('file_path', '')
         self._playing_track_start = _time.time()
+
+    def _on_radio_changed(self, station):
+        """Update UI when web radio starts/stops."""
+        if station:
+            from web_radio import station_display_name, COUNTRY_FLAGS
+            self._track_title_label.setText(station.get('name', ''))
+            country = station.get('country', '')
+            flag = COUNTRY_FLAGS.get(country, '')
+            self._track_artist_label.setText(f"{flag} {T('radio_live')}")
+
+            # Show LIVE badge instead of quality
+            self._quality_label.setText(T('radio_live'))
+            self._quality_label.setStyleSheet(
+                "font-size: 9px; padding: 2px 6px; border-radius: 3px; "
+                "background: #aa2222; color: #fff; font-weight: bold;"
+            )
+            self._quality_label.show()
+
+            # Cover: radio icon
+            self._cover_label.clear()
+            self._cover_label.setText('📻')
+            self._cover_label.setStyleSheet(
+                "background: #222; border-radius: 4px; color: #5577aa; font-size: 28px;"
+            )
+
+            # Hide seek bar (live stream)
+            self._seek_slider.setEnabled(False)
+            self._seek_slider.setValue(0)
+            self._position_label.setText(T('radio_live'))
+            self._duration_label.setText('')
+        else:
+            # Returning from radio to normal mode
+            self._seek_slider.setEnabled(True)
+            self._quality_label.hide()
+            self._position_label.setText('0:00')
+            self._duration_label.setText('0:00')
 
     def _on_volume_changed(self, vol):
         """Update volume slider and mute button."""
@@ -1328,6 +1412,11 @@ class MainWindow(QMainWindow):
         act_explorer = menu.addAction(T('show_in_explorer'))
         act_explorer.triggered.connect(lambda: self._show_in_explorer(track))
 
+        if track.get('play_count', 0) > 0:
+            menu.addSeparator()
+            act_reset = menu.addAction(T('reset_play_count'))
+            act_reset.triggered.connect(lambda: self._reset_track_play_count(track))
+
         menu.exec(self._track_table.viewport().mapToGlobal(pos))
 
     def _add_track_to_playlist(self, playlist_id, track_id):
@@ -1495,6 +1584,41 @@ class MainWindow(QMainWindow):
         if path:
             count = db.export_library(path)
             self._status_bar.showMessage(T('export_done', count=count), 5000)
+
+    def _on_reset_play_counts(self):
+        """Reset all play counts (anonymity/privacy)."""
+        stats = db.get_library_stats()
+        count = stats.get('tracks', 0)
+        if count == 0:
+            return
+
+        reply = QMessageBox.warning(
+            self, T('reset_play_counts'),
+            T('reset_play_counts_confirm', count=count),
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+        )
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+
+        db.execute("UPDATE tracks SET play_count = 0, last_played = NULL", commit=True)
+        self._status_bar.showMessage(T('reset_play_counts_done', count=count), 5000)
+        self._refresh_library()
+
+    def _reset_track_play_count(self, track):
+        """Reset play count for a single track."""
+        track_id = track.get('id')
+        if track_id:
+            db.execute(
+                "UPDATE tracks SET play_count = 0, last_played = NULL WHERE id = ?",
+                (track_id,), commit=True
+            )
+            self._status_bar.showMessage(T('reset_play_count_done'), 3000)
+            self._refresh_library()
+
+    def _on_smart_radio(self):
+        """Open Smart Radio dialog."""
+        dlg = SmartRadioDialog(self._player, self)
+        dlg.exec()
 
     def _on_report_bug(self):
         """Open GitHub issues page."""
@@ -2087,7 +2211,25 @@ class HelpDialog(QDialog):
         <li><b>Ctrl+.</b> — Stop playback</li>
         </ul>
         <p>Shuffle and repeat modes (Off / All / One) are available in the player bar.
-        The player supports gapless playback with pre-buffering near end of track.</p>
+        The player supports gapless playback with pre-buffering near end of track.
+        Play count is only incremented after 30 seconds of listening (skips don't count).</p>
+
+        <h3>Smart Radio (Ctrl+R)</h3>
+        <p><b>Play → Smart Radio</b> — Play random tracks with intelligent, combinable filters:</p>
+        <ul>
+        <li><b>Genre</b> — Filter by musical genre</li>
+        <li><b>Artist</b> — Filter by performer</li>
+        <li><b>Composer</b> — Filter by composer (ideal for classical music)</li>
+        <li><b>Album</b> — Filter by specific album or work</li>
+        <li><b>Era</b> — Medieval, Renaissance, Baroque (1600–1750), Classical (1750–1820),
+        Romantic (1820–1900), Modern (1900–1950), Contemporary (1950–2000), Recent (2000+),
+        or a custom year range</li>
+        <li><b>Audio quality</b> — Hi-Res, CD Quality, Lossless, or Lossy</li>
+        <li><b>Minimum rating</b> — Only tracks rated ★ or above</li>
+        <li><b>Unplayed only</b> — Discover tracks you haven't listened to yet</li>
+        </ul>
+        <p>All filters combine with AND logic. A live counter shows how many tracks match.
+        You can set a limit (e.g. "play 50 random tracks") or play all matching tracks shuffled.</p>
 
         <h3>Search (Ctrl+F)</h3>
         <p>Full-text search across titles, artists, albums, genres, and composers.
@@ -2105,6 +2247,21 @@ class HelpDialog(QDialog):
         <b>View → Search Podcasts Online</b> — Search the iTunes podcast directory.
         <b>View → Refresh Feeds</b> — Check all feeds for new episodes.
         Episodes can be downloaded for offline listening. Playback position is saved.</p>
+
+        <h3>Web Radio</h3>
+        <p>Listen to internet radio stations from around the world. Expand the
+        <b>Web Radio</b> section in the sidebar to browse stations by category:</p>
+        <ul>
+        <li><b>Classical</b> — France Musique (+ Baroque, Concerts, Easy Classique,
+        Contemporaine, Jazz, Ocora), Radio Classique, BBC Radio 3, Rai Radio 3 Classica,
+        RTS Espace 2, WQXR (New York), BR-Klassik, Concertzender, ABC Classic</li>
+        <li><b>Culture</b> — France Culture, France Inter</li>
+        <li><b>News</b> — Franceinfo, BBC World Service, NPR (WNYC)</li>
+        <li><b>Eclectic</b> — FIP and its themed channels (Rock, Jazz, Electro, World,
+        Groove, Pop, Nouveautés)</li>
+        </ul>
+        <p>Click any station to start streaming. A LIVE badge appears in the player bar.
+        Click any track in your library to return to local playback.</p>
 
         <h3>CD Audio Import</h3>
         <p><b>File → Import Audio CD</b> — Rip audio CDs to FLAC with automatic
@@ -2130,6 +2287,8 @@ class HelpDialog(QDialog):
         Essential when switching between Windows and Linux.</li>
         <li><b>Check Broken Paths</b> — Find tracks whose files no longer exist on disk</li>
         <li><b>Export Library</b> — Export all metadata to portable JSON format</li>
+        <li><b>Reset Play Counts</b> — Reset all play counts and last-played dates
+        for privacy. Individual tracks can also be reset via right-click context menu.</li>
         </ul>
 
         <h3>Audio Quality Indicators</h3>
@@ -2160,6 +2319,7 @@ class HelpDialog(QDialog):
         <tr><td><b>Ctrl+O</b></td><td>Add music folder</td></tr>
         <tr><td><b>Ctrl+F</b></td><td>Focus search bar</td></tr>
         <tr><td><b>F5</b></td><td>Rescan all folders</td></tr>
+        <tr><td><b>Ctrl+R</b></td><td>Smart Radio</td></tr>
         <tr><td><b>Ctrl+I</b></td><td>Library Statistics</td></tr>
         <tr><td><b>Ctrl+,</b></td><td>Settings</td></tr>
         <tr><td><b>Ctrl+Q</b></td><td>Quit</td></tr>
@@ -2199,7 +2359,25 @@ class HelpDialog(QDialog):
         <li><b>Ctrl+.</b> — Arrêter la lecture</li>
         </ul>
         <p>Les modes aléatoire et répétition (Désactivé / Tout / Un) sont dans la barre
-        de lecture. Le lecteur supporte la lecture sans coupure avec pré-chargement.</p>
+        de lecture. Le lecteur supporte la lecture sans coupure avec pré-chargement.
+        Le compteur de lecture ne s'incrémente qu'après 30 secondes d'écoute (les skips ne comptent pas).</p>
+
+        <h3>Radio Intelligente (Ctrl+R)</h3>
+        <p><b>Lecture → Radio intelligente</b> — Lire des pistes aléatoires avec filtres intelligents combinables :</p>
+        <ul>
+        <li><b>Genre</b> — Filtrer par genre musical</li>
+        <li><b>Artiste</b> — Filtrer par interprète</li>
+        <li><b>Compositeur</b> — Filtrer par compositeur (idéal pour la musique classique)</li>
+        <li><b>Album</b> — Filtrer par album ou œuvre spécifique</li>
+        <li><b>Époque</b> — Médiéval, Renaissance, Baroque (1600–1750), Classique (1750–1820),
+        Romantique (1820–1900), Moderne (1900–1950), Contemporain (1950–2000), Récent (2000+),
+        ou période personnalisée</li>
+        <li><b>Qualité audio</b> — Hi-Res, Qualité CD, Sans perte ou Avec perte</li>
+        <li><b>Note minimum</b> — Uniquement les pistes notées ★ ou plus</li>
+        <li><b>Jamais écoutées</b> — Découvrir les pistes pas encore écoutées</li>
+        </ul>
+        <p>Tous les filtres se combinent en ET. Un compteur en direct montre le nombre de pistes
+        correspondantes. Possibilité de limiter (ex. « lire 50 pistes aléatoires ») ou de tout lire en aléatoire.</p>
 
         <h3>Recherche (Ctrl+F)</h3>
         <p>Recherche plein texte sur titres, artistes, albums, genres et compositeurs.
@@ -2217,6 +2395,22 @@ class HelpDialog(QDialog):
         <b>Affichage → Chercher des podcasts</b> — Chercher dans le répertoire iTunes.
         <b>Affichage → Actualiser les flux</b> — Vérifier les nouveaux épisodes.
         Les épisodes peuvent être téléchargés pour écoute hors ligne. La position est sauvegardée.</p>
+
+        <h3>Web Radio</h3>
+        <p>Écoutez des stations de radio en ligne du monde entier. Développez la section
+        <b>Web Radio</b> dans la barre latérale pour parcourir les stations par catégorie :</p>
+        <ul>
+        <li><b>Classique</b> — France Musique (+ Baroque, Concerts, Easy Classique,
+        Contemporaine, Jazz, Ocora), Radio Classique, BBC Radio 3, Rai Radio 3 Classica,
+        RTS Espace 2, WQXR (New York), BR-Klassik, Concertzender, ABC Classic</li>
+        <li><b>Culture</b> — France Culture, France Inter</li>
+        <li><b>Info</b> — Franceinfo, BBC World Service, NPR (WNYC)</li>
+        <li><b>Éclectique</b> — FIP et ses chaînes thématiques (Rock, Jazz, Electro, World,
+        Groove, Pop, Nouveautés)</li>
+        </ul>
+        <p>Cliquez sur une station pour commencer le streaming. Un badge EN DIRECT apparaît
+        dans la barre de lecture. Cliquez sur une piste de votre bibliothèque pour revenir
+        à la lecture locale.</p>
 
         <h3>Import CD Audio</h3>
         <p><b>Fichier → Importer un CD audio</b> — Extraire les CD audio en FLAC avec
@@ -2243,6 +2437,8 @@ class HelpDialog(QDialog):
         Essentiel lors du passage entre Windows et Linux.</li>
         <li><b>Vérifier les chemins cassés</b> — Trouver les pistes dont les fichiers n'existent plus</li>
         <li><b>Exporter la bibliothèque</b> — Exporter toutes les métadonnées en JSON portable</li>
+        <li><b>Réinitialiser les compteurs</b> — Remet à zéro tous les compteurs de lecture
+        et dates pour l'anonymat. Réinitialisation individuelle via clic droit sur une piste.</li>
         </ul>
 
         <h3>Indicateurs Qualité Audio</h3>
@@ -2274,6 +2470,7 @@ class HelpDialog(QDialog):
         <tr><td><b>Ctrl+O</b></td><td>Ajouter un dossier</td></tr>
         <tr><td><b>Ctrl+F</b></td><td>Barre de recherche</td></tr>
         <tr><td><b>F5</b></td><td>Rescanner tous les dossiers</td></tr>
+        <tr><td><b>Ctrl+R</b></td><td>Radio intelligente</td></tr>
         <tr><td><b>Ctrl+I</b></td><td>Statistiques</td></tr>
         <tr><td><b>Ctrl+,</b></td><td>Paramètres</td></tr>
         <tr><td><b>Ctrl+Q</b></td><td>Quitter</td></tr>
@@ -2508,3 +2705,329 @@ class StatsDialog(QDialog):
 
         html += '</div>'
         return html
+
+
+# Musical eras for Smart Radio filtering
+ERAS = [
+    ('era_medieval',      None, 1399),
+    ('era_renaissance',   1400, 1600),
+    ('era_baroque',       1600, 1750),
+    ('era_classical',     1750, 1820),
+    ('era_romantic',      1820, 1900),
+    ('era_modern',        1900, 1950),
+    ('era_contemporary',  1950, 2000),
+    ('era_recent',        2000, None),
+]
+
+LOSSLESS_FORMATS = {'FLAC', 'ALAC', 'WAV', 'AIFF', 'APE', 'WV', 'TTA', 'DSF', 'DFF', 'DSD'}
+LOSSY_FORMATS = {'MP3', 'AAC', 'OGG', 'OPUS', 'WMA', 'M4A', 'MPC', 'SPX'}
+
+
+class SmartRadioDialog(QDialog):
+    """Smart Radio — play random tracks with combinable filters.
+
+    Filters: genre, artist, composer, album, era/year range,
+    audio quality, minimum rating, unplayed only.
+    All filters combine with AND logic.
+    """
+
+    def __init__(self, player, parent=None):
+        super().__init__(parent)
+        self._player = player
+        self.setWindowTitle(T('smart_radio_title'))
+        self.setMinimumSize(520, 480)
+
+        layout = QVBoxLayout(self)
+
+        # --- Filters ---
+        filters_box = QGroupBox(T('smart_radio'))
+        form = QFormLayout(filters_box)
+
+        # Genre
+        self._genre_combo = QComboBox()
+        self._genre_combo.addItem(T('filter_all'), '')
+        genres = db.fetchall(
+            "SELECT DISTINCT genre FROM tracks WHERE genre IS NOT NULL AND genre != '' ORDER BY genre"
+        )
+        for g in genres:
+            self._genre_combo.addItem(g['genre'], g['genre'])
+        self._genre_combo.currentIndexChanged.connect(self._update_count)
+        form.addRow(T('filter_genre'), self._genre_combo)
+
+        # Artist
+        self._artist_combo = QComboBox()
+        self._artist_combo.setEditable(True)
+        self._artist_combo.setInsertPolicy(QComboBox.InsertPolicy.NoInsert)
+        self._artist_combo.addItem(T('filter_all'), 0)
+        artists = db.fetchall(
+            "SELECT id, name FROM artists ORDER BY sort_name"
+        )
+        for a in artists:
+            self._artist_combo.addItem(a['name'], a['id'])
+        self._artist_combo.currentIndexChanged.connect(self._update_count)
+        form.addRow(T('filter_artist'), self._artist_combo)
+
+        # Composer
+        self._composer_combo = QComboBox()
+        self._composer_combo.setEditable(True)
+        self._composer_combo.setInsertPolicy(QComboBox.InsertPolicy.NoInsert)
+        self._composer_combo.addItem(T('filter_all'), '')
+        composers = db.fetchall(
+            "SELECT DISTINCT composer FROM tracks WHERE composer IS NOT NULL AND composer != '' ORDER BY composer"
+        )
+        for c in composers:
+            self._composer_combo.addItem(c['composer'], c['composer'])
+        self._composer_combo.currentIndexChanged.connect(self._update_count)
+        form.addRow(T('filter_composer'), self._composer_combo)
+
+        # Album
+        self._album_combo = QComboBox()
+        self._album_combo.setEditable(True)
+        self._album_combo.setInsertPolicy(QComboBox.InsertPolicy.NoInsert)
+        self._album_combo.addItem(T('filter_all'), 0)
+        albums = db.fetchall(
+            "SELECT al.id, al.title, a.name as artist_name FROM albums al "
+            "LEFT JOIN artists a ON al.artist_id = a.id ORDER BY al.title"
+        )
+        for al in albums:
+            label = f"{al['title']} — {al['artist_name']}" if al['artist_name'] else al['title']
+            self._album_combo.addItem(label, al['id'])
+        self._album_combo.currentIndexChanged.connect(self._update_count)
+        form.addRow(T('filter_album'), self._album_combo)
+
+        # Era
+        self._era_combo = QComboBox()
+        self._era_combo.addItem(T('filter_all_f'), '')
+        for key, _, _ in ERAS:
+            self._era_combo.addItem(T(key), key)
+        self._era_combo.addItem(T('era_custom'), 'custom')
+        self._era_combo.currentIndexChanged.connect(self._on_era_changed)
+        form.addRow(T('filter_era'), self._era_combo)
+
+        # Custom year range
+        year_row = QHBoxLayout()
+        self._year_from = QSpinBox()
+        self._year_from.setRange(0, 2100)
+        self._year_from.setSpecialValueText('—')
+        self._year_from.setValue(0)
+        self._year_from.valueChanged.connect(self._update_count)
+        self._year_to = QSpinBox()
+        self._year_to.setRange(0, 2100)
+        self._year_to.setSpecialValueText('—')
+        self._year_to.setValue(0)
+        self._year_to.valueChanged.connect(self._update_count)
+        year_row.addWidget(self._year_from)
+        year_row.addWidget(QLabel(T('filter_year_to')))
+        year_row.addWidget(self._year_to)
+        self._year_widget = QWidget()
+        self._year_widget.setLayout(year_row)
+        self._year_widget.hide()
+        form.addRow('', self._year_widget)
+
+        # Quality
+        self._quality_combo = QComboBox()
+        self._quality_combo.addItem(T('quality_all'), '')
+        self._quality_combo.addItem(T('quality_filter_hires'), 'hires')
+        self._quality_combo.addItem(T('quality_filter_cd'), 'cd')
+        self._quality_combo.addItem(T('quality_filter_lossless'), 'lossless')
+        self._quality_combo.addItem(T('quality_filter_lossy'), 'lossy')
+        self._quality_combo.currentIndexChanged.connect(self._update_count)
+        form.addRow(T('filter_quality'), self._quality_combo)
+
+        # Rating
+        self._rating_combo = QComboBox()
+        self._rating_combo.addItem(T('filter_all'), 0)
+        for i in range(1, 6):
+            self._rating_combo.addItem('★' * i, i)
+        self._rating_combo.currentIndexChanged.connect(self._update_count)
+        form.addRow(T('filter_rating_min'), self._rating_combo)
+
+        # Unplayed only
+        self._unplayed_check = QCheckBox(T('filter_unplayed'))
+        self._unplayed_check.stateChanged.connect(self._update_count)
+        form.addRow('', self._unplayed_check)
+
+        layout.addWidget(filters_box)
+
+        # --- Match count ---
+        self._match_label = QLabel()
+        self._match_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._match_label.setStyleSheet(
+            "font-size: 14px; font-weight: bold; padding: 8px; "
+            "background: #252530; border-radius: 6px; color: #5577aa;"
+        )
+        layout.addWidget(self._match_label)
+
+        # --- Limit ---
+        limit_row = QHBoxLayout()
+        limit_row.addWidget(QLabel(T('smart_radio_limit')))
+        self._limit_spin = QSpinBox()
+        self._limit_spin.setRange(0, 10000)
+        self._limit_spin.setSpecialValueText(T('smart_radio_unlimited'))
+        self._limit_spin.setValue(0)
+        self._limit_spin.setSuffix(' tracks')
+        limit_row.addWidget(self._limit_spin)
+        layout.addLayout(limit_row)
+
+        # --- Buttons ---
+        btn_row = QHBoxLayout()
+        self._btn_play = QPushButton(T('smart_radio_play_all'))
+        self._btn_play.setStyleSheet(
+            "font-size: 13px; font-weight: bold; padding: 8px 16px; "
+            "background: #3c5078; border-radius: 6px; color: #fff;"
+        )
+        self._btn_play.clicked.connect(self._on_play)
+        btn_row.addWidget(self._btn_play)
+
+        btn_cancel = QPushButton(T('cancel') if 'cancel' in TX else 'Cancel')
+        btn_cancel.clicked.connect(self.reject)
+        btn_row.addWidget(btn_cancel)
+        layout.addLayout(btn_row)
+
+        # Initial count
+        self._update_count()
+
+    def _on_era_changed(self):
+        """Show/hide custom year range based on era selection."""
+        era_key = self._era_combo.currentData()
+        if era_key == 'custom':
+            self._year_widget.show()
+        else:
+            self._year_widget.hide()
+        self._update_count()
+
+    def _build_query(self):
+        """Build SQL query and params from current filters."""
+        conditions = []
+        params = []
+
+        # Genre
+        genre = self._genre_combo.currentData()
+        if genre:
+            conditions.append("t.genre = ?")
+            params.append(genre)
+
+        # Artist
+        artist_id = self._artist_combo.currentData()
+        if artist_id:
+            conditions.append("(t.artist_id = ? OR t.album_artist_id = ?)")
+            params.extend([artist_id, artist_id])
+
+        # Composer
+        composer = self._composer_combo.currentData()
+        if composer:
+            conditions.append("t.composer = ?")
+            params.append(composer)
+
+        # Album
+        album_id = self._album_combo.currentData()
+        if album_id:
+            conditions.append("t.album_id = ?")
+            params.append(album_id)
+
+        # Era / Year range
+        era_key = self._era_combo.currentData()
+        if era_key == 'custom':
+            y_from = self._year_from.value()
+            y_to = self._year_to.value()
+            if y_from > 0:
+                conditions.append("t.year >= ?")
+                params.append(y_from)
+            if y_to > 0:
+                conditions.append("t.year <= ?")
+                params.append(y_to)
+        elif era_key:
+            for key, start, end in ERAS:
+                if key == era_key:
+                    if start is not None:
+                        conditions.append("t.year >= ?")
+                        params.append(start)
+                    if end is not None:
+                        conditions.append("t.year <= ?")
+                        params.append(end)
+                    conditions.append("t.year IS NOT NULL")
+                    break
+
+        # Quality
+        quality = self._quality_combo.currentData()
+        if quality == 'hires':
+            conditions.append(
+                "(t.sample_rate > 48000 OR t.bit_depth > 16) AND "
+                "t.file_format IN ('FLAC','ALAC','WAV','AIFF','APE','WV','DSF','DFF','DSD','TTA')"
+            )
+        elif quality == 'cd':
+            conditions.append(
+                "t.sample_rate = 44100 AND t.bit_depth = 16 AND "
+                "t.file_format IN ('FLAC','ALAC','WAV','AIFF','APE','WV','TTA')"
+            )
+        elif quality == 'lossless':
+            fmt_list = ','.join(f"'{f}'" for f in LOSSLESS_FORMATS)
+            conditions.append(f"t.file_format IN ({fmt_list})")
+        elif quality == 'lossy':
+            fmt_list = ','.join(f"'{f}'" for f in LOSSY_FORMATS)
+            conditions.append(f"t.file_format IN ({fmt_list})")
+
+        # Rating
+        min_rating = self._rating_combo.currentData()
+        if min_rating:
+            conditions.append("t.rating >= ?")
+            params.append(min_rating)
+
+        # Unplayed
+        if self._unplayed_check.isChecked():
+            conditions.append("(t.play_count = 0 OR t.play_count IS NULL)")
+
+        where = " AND ".join(conditions) if conditions else "1=1"
+        return where, params
+
+    def _update_count(self):
+        """Update match count label."""
+        where, params = self._build_query()
+        row = db.fetchone(
+            f"SELECT COUNT(*) as cnt FROM tracks t WHERE {where}", tuple(params)
+        )
+        count = row['cnt'] if row else 0
+
+        if count > 0:
+            self._match_label.setText(T('smart_radio_match', count=count))
+            self._match_label.setStyleSheet(
+                "font-size: 14px; font-weight: bold; padding: 8px; "
+                "background: #252530; border-radius: 6px; color: #5577aa;"
+            )
+            self._btn_play.setEnabled(True)
+        else:
+            self._match_label.setText(T('smart_radio_no_match'))
+            self._match_label.setStyleSheet(
+                "font-size: 14px; font-weight: bold; padding: 8px; "
+                "background: #252530; border-radius: 6px; color: #aa5555;"
+            )
+            self._btn_play.setEnabled(False)
+
+    def _on_play(self):
+        """Fetch matching tracks, shuffle, and play."""
+        import random
+
+        where, params = self._build_query()
+        tracks = db.fetchall(
+            f"SELECT t.*, a.name as artist_name, al.title as album_title "
+            f"FROM tracks t "
+            f"LEFT JOIN artists a ON t.artist_id = a.id "
+            f"LEFT JOIN albums al ON t.album_id = al.id "
+            f"WHERE {where} "
+            f"ORDER BY RANDOM()",
+            tuple(params)
+        )
+
+        if not tracks:
+            return
+
+        # Apply limit
+        limit = self._limit_spin.value()
+        if limit > 0:
+            tracks = tracks[:limit]
+
+        # Set queue and play
+        self._player.set_queue(tracks, play_index=0)
+        self._player.play()
+
+        self.accept()

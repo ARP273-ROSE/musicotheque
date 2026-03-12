@@ -43,6 +43,7 @@ class AudioPlayer(QObject):
     error_occurred = pyqtSignal(str)
     repeat_changed = pyqtSignal(object)       # RepeatMode
     shuffle_changed = pyqtSignal(object)      # ShuffleMode
+    radio_changed = pyqtSignal(dict)          # station info or {} when stopped
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -63,6 +64,8 @@ class AudioPlayer(QObject):
         self._volume = 80
         self._muted = False
         self._state = PlayerState.STOPPED
+        self._streaming = False          # True when playing web radio
+        self._current_station = None     # Current radio station dict
 
         # Apply initial volume
         self._audio_output.setVolume(self._volume / 100.0)
@@ -127,8 +130,49 @@ class AudioPlayer(QObject):
     def shuffle_mode(self):
         return self._shuffle
 
+    @property
+    def is_streaming(self):
+        """True when playing a web radio stream."""
+        return self._streaming
+
+    @property
+    def current_station(self):
+        """Current radio station dict, or None."""
+        return self._current_station
+
+    def play_stream(self, station):
+        """Play a web radio stream.
+
+        Args:
+            station: dict with 'name', 'url', 'country', etc.
+        """
+        url = station.get('url', '')
+        if not url:
+            return
+
+        self._streaming = True
+        self._current_station = station
+        self._player.setSource(QUrl(url))
+        self._player.play()
+        self.radio_changed.emit(station)
+        log.info("Streaming: %s (%s)", station.get('name', '?'), url)
+
+    def stop_stream(self):
+        """Stop web radio streaming and return to normal mode."""
+        if self._streaming:
+            self._player.stop()
+            self._streaming = False
+            self._current_station = None
+            self.radio_changed.emit({})
+
     def play_track(self, track, queue=None, index=0):
         """Play a specific track, optionally setting the queue."""
+        # Stop streaming if active
+        if self._streaming:
+            self._streaming = False
+            self._current_station = None
+            self.radio_changed.emit({})
+
         if queue is not None:
             self._queue = list(queue)
             self._original_queue = list(queue)
