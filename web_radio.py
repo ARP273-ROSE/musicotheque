@@ -92,7 +92,7 @@ RADIO_STATIONS = [
     # --- Classical Music (United Kingdom) ---
     {
         'name': 'BBC Radio 3',
-        'url': 'https://as-hls-ww.live.cf.md.bbci.co.uk/pool_23461179/live/ww/bbc_radio_three/bbc_radio_three.isml/bbc_radio_three-audio=320000.norewind.m3u8',
+        'url': 'https://as-hls-ww.live.cf.md.bbci.co.uk/pool_23461179/live/ww/bbc_radio_three/bbc_radio_three.isml/bbc_radio_three-audio=96000.norewind.m3u8',
         'category': CATEGORY_CLASSICAL,
         'country': 'GB',
         'language': 'en',
