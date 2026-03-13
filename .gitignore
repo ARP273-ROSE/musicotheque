@@ -19,6 +19,8 @@ CLAUDE.md
 _crash_report.json
 _error.log
 musicotheque.db
+musicotheque.db-wal
+musicotheque.db-shm
 musicotheque.log
 backups/
 .shortcut_config.json
