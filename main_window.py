@@ -9,15 +9,17 @@ from pathlib import Path
 from PyQt6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QSplitter,
     QTreeWidget, QTreeWidgetItem, QTableWidget, QTableWidgetItem,
-    QHeaderView, QLabel, QPushButton, QSlider, QLineEdit,
+    QTableView, QHeaderView, QLabel, QPushButton, QSlider, QLineEdit,
     QStatusBar, QMenuBar, QMenu, QToolBar, QFileDialog,
     QMessageBox, QProgressBar, QAbstractItemView, QComboBox,
     QStyle, QApplication, QSizePolicy, QFrame, QStackedWidget,
     QDialog, QTextBrowser, QDialogButtonBox, QGroupBox,
-    QFormLayout, QSpinBox, QCheckBox, QInputDialog
+    QFormLayout, QSpinBox, QCheckBox, QInputDialog,
+    QStyledItemDelegate
 )
 from PyQt6.QtCore import (
-    Qt, QThread, QTimer, QSize, pyqtSignal, QSettings
+    Qt, QThread, QTimer, QSize, pyqtSignal, QSettings,
+    QAbstractTableModel, QModelIndex, QMimeData, QUrl
 )
 from PyQt6.QtGui import (
     QAction, QKeySequence, QPixmap, QImage, QIcon, QFont,
@@ -27,7 +29,7 @@ from PyQt6.QtGui import (
 import database as db
 from i18n import T, get_lang, set_lang, TX
 from player import AudioPlayer, PlayerState, RepeatMode, ShuffleMode
-from scanner import ScanWorker
+from scanner import ScanWorker, write_metadata
 from itunes_import import ITunesImportWorker, ITunesPodcastImportWorker
 from metadata_fetch import MetadataFetchWorker
 from backup_manager import backup_database, restore_database, list_backups
@@ -51,22 +53,232 @@ EPISODE_COLUMNS = [
     ('col_downloaded', 'file_path', 60),
 ]
 
-# Column definitions for track table
-COLUMNS = [
-    ('col_track_num', 'track_number', 40),
-    ('col_title', 'title', 280),
-    ('col_artist', 'artist_name', 180),
-    ('col_album', 'album_title', 180),
-    ('col_duration', 'duration_ms', 70),
-    ('col_year', 'year', 55),
-    ('col_genre', 'genre', 100),
-    ('col_format', 'file_format', 55),
-    ('col_bitrate', 'bitrate', 70),
-    ('col_sample_rate', 'sample_rate', 80),
-    ('col_bit_depth', 'bit_depth', 55),
-    ('col_play_count', 'play_count', 50),
-    ('col_rating', 'rating', 50),
+# All available columns: (i18n_key, db_key, default_width, visible_by_default)
+ALL_COLUMNS = [
+    ('col_disc_num', 'disc_number', 40, False),
+    ('col_track_num', 'track_number', 40, True),
+    ('col_title', 'title', 280, True),
+    ('col_artist', 'artist_name', 180, True),
+    ('col_album', 'album_title', 180, True),
+    ('col_duration', 'duration_ms', 70, True),
+    ('col_year', 'year', 55, True),
+    ('col_genre', 'genre', 100, True),
+    ('col_composer', 'composer', 140, False),
+    ('col_period', 'period', 100, False),
+    ('col_movement', 'movement', 110, False),
+    ('col_sub_period', 'sub_period', 100, False),
+    ('col_form', 'form', 90, False),
+    ('col_catalogue', 'catalogue', 90, False),
+    ('col_instruments', 'instruments', 110, False),
+    ('col_music_key', 'music_key', 70, False),
+    ('col_format', 'file_format', 55, True),
+    ('col_bitrate', 'bitrate', 70, True),
+    ('col_sample_rate', 'sample_rate', 80, True),
+    ('col_bit_depth', 'bit_depth', 55, True),
+    ('col_channels', 'channels', 55, False),
+    ('col_file_size', 'file_size', 70, False),
+    ('col_play_count', 'play_count', 50, True),
+    ('col_rating', 'rating', 50, True),
+    ('col_added_at', 'added_at', 100, False),
+    ('col_file_path', 'file_path', 200, False),
 ]
+
+# Default visible columns (for backward compat)
+DEFAULT_VISIBLE = {c[1] for c in ALL_COLUMNS if c[3]}
+
+# Numeric columns that should sort numerically
+NUMERIC_KEYS = {'track_number', 'disc_number', 'duration_ms', 'bitrate', 'sample_rate',
+                'bit_depth', 'play_count', 'year', 'rating', 'channels', 'file_size'}
+
+
+def _sort_key(text):
+    """Generate a sort key that handles accents and case correctly."""
+    import unicodedata
+    # NFD decomposition strips accents: É -> E + combining accent
+    nfkd = unicodedata.normalize('NFKD', text.lower())
+    return ''.join(c for c in nfkd if not unicodedata.combining(c))
+
+
+class TrackTableModel(QAbstractTableModel):
+    """High-performance model for 40K+ tracks. No widget items created."""
+
+    _CH_MAP = {1: 'Mono', 2: 'Stereo', 6: '5.1', 8: '7.1'}
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._tracks = []
+        self._columns = ALL_COLUMNS
+
+    def setTracks(self, tracks):
+        """Replace all data — instant, no item creation."""
+        self.beginResetModel()
+        self._tracks = tracks
+        self.endResetModel()
+
+    def tracks(self):
+        return self._tracks
+
+    def trackAt(self, row):
+        if 0 <= row < len(self._tracks):
+            return self._tracks[row]
+        return None
+
+    def rowCount(self, parent=QModelIndex()):
+        return len(self._tracks)
+
+    def columnCount(self, parent=QModelIndex()):
+        return len(self._columns)
+
+    def data(self, index, role=Qt.ItemDataRole.DisplayRole):
+        if not index.isValid():
+            return None
+        row, col = index.row(), index.column()
+        if row < 0 or row >= len(self._tracks):
+            return None
+        track = self._tracks[row]
+        key = self._columns[col][1]
+        val = track.get(key, '')
+
+        if role == Qt.ItemDataRole.DisplayRole:
+            return self._format(key, val)
+        elif role == Qt.ItemDataRole.UserRole:
+            return track
+        elif role == Qt.ItemDataRole.TextAlignmentRole:
+            if key in NUMERIC_KEYS:
+                return int(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        return None
+
+    def headerData(self, section, orientation, role=Qt.ItemDataRole.DisplayRole):
+        if orientation == Qt.Orientation.Horizontal and role == Qt.ItemDataRole.DisplayRole:
+            return T(self._columns[section][0])
+        return None
+
+    def sort(self, column, order=Qt.SortOrder.AscendingOrder):
+        """Sort by column — operates on the backing list directly."""
+        if not self._tracks:
+            return
+        self.layoutAboutToBeChanged.emit()
+        key = self._columns[column][1]
+        reverse = (order == Qt.SortOrder.DescendingOrder)
+        if key in NUMERIC_KEYS:
+            self._tracks.sort(key=lambda t: t.get(key, 0) or 0, reverse=reverse)
+        else:
+            self._tracks.sort(
+                key=lambda t: _sort_key(str(t.get(key, '') or '')),
+                reverse=reverse
+            )
+        self.layoutChanged.emit()
+
+    def flags(self, index):
+        """Enable drag for all items."""
+        default = super().flags(index)
+        if index.isValid():
+            return default | Qt.ItemFlag.ItemIsDragEnabled
+        return default
+
+    def mimeTypes(self):
+        return ['text/uri-list']
+
+    def mimeData(self, indexes):
+        """Provide file URLs for drag & drop to external apps."""
+        mime = QMimeData()
+        urls = []
+        seen = set()
+        for idx in indexes:
+            if idx.column() != 0:
+                continue
+            track = self.trackAt(idx.row())
+            if not track:
+                continue
+            fp = track.get('file_path', '')
+            if fp and fp not in seen and os.path.exists(fp):
+                seen.add(fp)
+                urls.append(QUrl.fromLocalFile(fp))
+        mime.setUrls(urls)
+        return mime
+
+    def _format(self, key, val):
+        """Format a cell value for display."""
+        if key == 'duration_ms':
+            return format_duration(val)
+        if key == 'bitrate':
+            return format_bitrate(val)
+        if key == 'sample_rate':
+            return format_sample_rate(val)
+        if key == 'bit_depth':
+            return f"{val}-bit" if val else ''
+        if key == 'file_size':
+            return format_file_size(val) if val else ''
+        if key == 'channels':
+            return self._CH_MAP.get(val, str(val)) if val else ''
+        if key == 'rating':
+            return '\u2605' * val if val else ''
+        if key in NUMERIC_KEYS:
+            return str(val) if val else ''
+        return str(val) if val else ''
+
+
+class EpisodeTableModel(QAbstractTableModel):
+    """Lightweight model for podcast episodes."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._episodes = []
+
+    def setEpisodes(self, episodes):
+        self.beginResetModel()
+        self._episodes = episodes
+        self.endResetModel()
+
+    def rowCount(self, parent=QModelIndex()):
+        return len(self._episodes)
+
+    def columnCount(self, parent=QModelIndex()):
+        return len(EPISODE_COLUMNS)
+
+    def data(self, index, role=Qt.ItemDataRole.DisplayRole):
+        if not index.isValid():
+            return None
+        row, col = index.row(), index.column()
+        if row < 0 or row >= len(self._episodes):
+            return None
+        ep = self._episodes[row]
+        key = EPISODE_COLUMNS[col][1]
+        val = ep.get(key, '')
+
+        if role == Qt.ItemDataRole.DisplayRole:
+            if key == 'duration_ms':
+                return format_duration(val)
+            if key == 'published_at':
+                return str(val)[:10] if val else ''
+            if key == 'listened':
+                return '\u2713' if val else ''
+            if key == 'file_path':
+                return '\U0001f4be' if val else ''
+            return str(val) if val else ''
+        elif role == Qt.ItemDataRole.UserRole:
+            return ep
+        elif role == Qt.ItemDataRole.TextAlignmentRole:
+            if key in ('duration_ms', 'listened', 'file_path', 'published_at'):
+                return int(Qt.AlignmentFlag.AlignCenter | Qt.AlignmentFlag.AlignVCenter)
+        return None
+
+    def headerData(self, section, orientation, role=Qt.ItemDataRole.DisplayRole):
+        if orientation == Qt.Orientation.Horizontal and role == Qt.ItemDataRole.DisplayRole:
+            return T(EPISODE_COLUMNS[section][0])
+        return None
+
+    def sort(self, column, order=Qt.SortOrder.AscendingOrder):
+        if not self._episodes:
+            return
+        self.layoutAboutToBeChanged.emit()
+        key = EPISODE_COLUMNS[column][1]
+        reverse = (order == Qt.SortOrder.DescendingOrder)
+        self._episodes.sort(
+            key=lambda e: e.get(key, '') or '',
+            reverse=reverse
+        )
+        self.layoutChanged.emit()
 
 
 def format_duration(ms):
@@ -131,6 +343,19 @@ def format_sample_rate(sr):
     return f'{sr} Hz'
 
 
+def format_file_size(size_bytes):
+    """Format file size in human-readable form."""
+    if not size_bytes:
+        return ''
+    if size_bytes < 1024:
+        return f'{size_bytes} B'
+    if size_bytes < 1024 * 1024:
+        return f'{size_bytes / 1024:.0f} KB'
+    if size_bytes < 1024 * 1024 * 1024:
+        return f'{size_bytes / (1024 * 1024):.1f} MB'
+    return f'{size_bytes / (1024 * 1024 * 1024):.2f} GB'
+
+
 def cover_to_pixmap(cover_data, size=200):
     """Convert cover art bytes to QPixmap."""
     if not cover_data:
@@ -146,6 +371,167 @@ def cover_to_pixmap(cover_data, size=200):
         )
     except Exception:
         return None
+
+
+# Fields editable in single-track mode (all)
+_SINGLE_FIELDS = [
+    ('meta_title', 'title'),
+    ('meta_artist', 'artist_name'),
+    ('meta_album_artist', 'album_artist'),
+    ('meta_album', 'album_title'),
+    ('meta_genre', 'genre'),
+    ('meta_year', 'year'),
+    ('meta_track_num', 'track_number'),
+    ('meta_disc_num', 'disc_number'),
+    ('meta_composer', 'composer'),
+    ('meta_period', 'period'),
+    ('meta_movement', 'movement'),
+    ('meta_sub_period', 'sub_period'),
+    ('meta_form', 'form'),
+    ('meta_catalogue', 'catalogue'),
+    ('meta_instruments', 'instruments'),
+    ('meta_music_key', 'music_key'),
+]
+
+# Fields editable in multi-track mode (shared/batch fields only)
+_MULTI_FIELDS = [
+    ('meta_artist', 'artist_name'),
+    ('meta_album_artist', 'album_artist'),
+    ('meta_album', 'album_title'),
+    ('meta_genre', 'genre'),
+    ('meta_year', 'year'),
+    ('meta_composer', 'composer'),
+    ('meta_period', 'period'),
+    ('meta_movement', 'movement'),
+    ('meta_sub_period', 'sub_period'),
+    ('meta_form', 'form'),
+    ('meta_catalogue', 'catalogue'),
+    ('meta_instruments', 'instruments'),
+    ('meta_music_key', 'music_key'),
+]
+
+# DB column → scanner write_metadata key mapping
+_DB_TO_SCANNER = {
+    'artist_name': 'artist',
+    'album_artist': 'album_artist',
+    'album_title': 'album',
+    'title': 'title',
+    'genre': 'genre',
+    'composer': 'composer',
+    'period': 'period',
+    'movement': 'movement',
+    'sub_period': 'sub_period',
+    'form': 'form',
+    'catalogue': 'catalogue',
+    'instruments': 'instruments',
+    'music_key': 'music_key',
+}
+
+
+class MetadataEditDialog(QDialog):
+    """iTunes-style metadata editor. Adapts to single or multi-track selection."""
+
+    def __init__(self, tracks, parent=None):
+        super().__init__(parent)
+        self._tracks = tracks
+        self._multi = len(tracks) > 1
+        self._fields = _MULTI_FIELDS if self._multi else _SINGLE_FIELDS
+        self._edits = {}  # db_key → QLineEdit/QSpinBox
+
+        if self._multi:
+            self.setWindowTitle(T('edit_metadata_multi', count=len(tracks)))
+        else:
+            self.setWindowTitle(T('edit_metadata_single'))
+        self.setMinimumWidth(450)
+
+        layout = QVBoxLayout(self)
+
+        # Info banner for multi-edit
+        if self._multi:
+            info = QLabel(T('edit_metadata_multi', count=len(tracks)))
+            info.setStyleSheet("font-weight: bold; padding: 6px; color: #aaa;")
+            layout.addWidget(info)
+
+        form = QFormLayout()
+        form.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
+
+        for i18n_key, db_key in self._fields:
+            label = T(i18n_key)
+            if db_key in ('year', 'track_number', 'disc_number'):
+                widget = QSpinBox()
+                widget.setRange(0, 99999)
+                widget.setSpecialValueText('')  # Show empty when 0
+                if not self._multi:
+                    val = tracks[0].get(db_key, 0) or 0
+                    widget.setValue(int(val))
+                else:
+                    # For multi: show common value or 0 (keep original)
+                    values = {t.get(db_key, 0) or 0 for t in tracks}
+                    if len(values) == 1:
+                        widget.setValue(values.pop())
+                    else:
+                        widget.setValue(0)
+                        widget.setToolTip(T('meta_keep_original'))
+                self._edits[db_key] = widget
+            else:
+                widget = QLineEdit()
+                if not self._multi:
+                    widget.setText(str(tracks[0].get(db_key, '') or ''))
+                else:
+                    # Show common value or placeholder
+                    values = {str(t.get(db_key, '') or '') for t in tracks}
+                    if len(values) == 1:
+                        widget.setText(values.pop())
+                    else:
+                        widget.setPlaceholderText(T('meta_keep_original'))
+                self._edits[db_key] = widget
+            form.addRow(label + ':', widget)
+
+        layout.addLayout(form)
+
+        # Buttons
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
+        )
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+
+    def get_changes(self):
+        """Return dict of {db_key: new_value} for fields that were modified.
+        For multi-edit, only returns fields where user typed something."""
+        changes = {}
+        for db_key, widget in self._edits.items():
+            if isinstance(widget, QSpinBox):
+                val = widget.value()
+                if self._multi:
+                    # In multi-mode, 0 = keep original (unless all were 0)
+                    original_values = {t.get(db_key, 0) or 0 for t in self._tracks}
+                    if len(original_values) == 1 and original_values.pop() == val:
+                        continue  # unchanged
+                    if val == 0 and len(original_values) > 1:
+                        continue  # user didn't change mixed value
+                    changes[db_key] = val
+                else:
+                    orig = self._tracks[0].get(db_key, 0) or 0
+                    if val != int(orig):
+                        changes[db_key] = val
+            else:
+                val = widget.text().strip()
+                if self._multi:
+                    # Empty = keep original (placeholder shown)
+                    if not val:
+                        continue
+                    # Check if it's the same as the common value
+                    values = {str(t.get(db_key, '') or '') for t in self._tracks}
+                    if len(values) == 1 and values.pop() == val:
+                        continue
+                    changes[db_key] = val
+                else:
+                    orig = str(self._tracks[0].get(db_key, '') or '')
+                    if val != orig:
+                        changes[db_key] = val
+        return changes
 
 
 class MainWindow(QMainWindow):
@@ -258,11 +644,10 @@ class MainWindow(QMainWindow):
         content_layout.setContentsMargins(0, 0, 0, 0)
         content_layout.setSpacing(0)
 
-        # Track table
-        self._track_table = QTableWidget()
-        self._track_table.setColumnCount(len(COLUMNS))
-        headers = [T(col[0]) for col in COLUMNS]
-        self._track_table.setHorizontalHeaderLabels(headers)
+        # Track table (QTableView + model for 40K+ track performance)
+        self._track_model = TrackTableModel(self)
+        self._track_table = QTableView()
+        self._track_table.setModel(self._track_model)
         self._track_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self._track_table.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
         self._track_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
@@ -271,13 +656,36 @@ class MainWindow(QMainWindow):
         self._track_table.verticalHeader().setVisible(False)
         self._track_table.verticalHeader().setDefaultSectionSize(26)
         self._track_table.setShowGrid(False)
+        self._track_table.setDragEnabled(True)
+        self._track_table.setDragDropMode(QAbstractItemView.DragDropMode.DragOnly)
+        self._track_table.setDefaultDropAction(Qt.DropAction.CopyAction)
 
-        # Column widths
+        # Load saved column visibility or use defaults
+        settings = QSettings('MusicOtheque', 'MusicOtheque')
+        saved_vis = settings.value('visible_columns', None)
+        if saved_vis and isinstance(saved_vis, list):
+            self._visible_columns = set(saved_vis)
+        else:
+            self._visible_columns = set(DEFAULT_VISIBLE)
+
+        # Column widths and visibility
         header = self._track_table.horizontalHeader()
-        for i, (_, _, w) in enumerate(COLUMNS):
+        title_col_idx = 2
+        for i, (_, key, w, _) in enumerate(ALL_COLUMNS):
             self._track_table.setColumnWidth(i, w)
+            if key not in self._visible_columns:
+                self._track_table.setColumnHidden(i, True)
+            if key == 'title':
+                title_col_idx = i
         header.setStretchLastSection(False)
-        header.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)  # Title stretches
+        header.setSectionResizeMode(title_col_idx, QHeaderView.ResizeMode.Stretch)
+
+        # Right-click on header for column chooser
+        header.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        header.customContextMenuRequested.connect(self._on_header_context_menu)
+
+        # Episode mode flag (for switching between track/episode views)
+        self._episode_mode = False
 
         content_layout.addWidget(self._track_table, 1)
 
@@ -781,7 +1189,7 @@ class MainWindow(QMainWindow):
         self._seek_slider.sliderMoved.connect(self._player.seek)
 
         # Table double-click and context menu
-        self._track_table.cellDoubleClicked.connect(self._on_track_double_click)
+        self._track_table.doubleClicked.connect(self._on_track_double_click)
         self._track_table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self._track_table.customContextMenuRequested.connect(self._on_track_context_menu)
 
@@ -875,7 +1283,12 @@ class MainWindow(QMainWindow):
                 ORDER BY t.composer, t.year, al.title, t.disc_number, t.track_number
             """, (filter_value,))
         elif view.startswith('playlist:'):
-            pl_id = int(view.split(':')[1])
+            try:
+                pl_id = int(view.split(':')[1])
+            except (IndexError, ValueError):
+                tracks = []
+                self._populate_table(tracks)
+                return
             tracks = db.fetchall("""
                 SELECT t.*, a.name as artist_name, al.title as album_title
                 FROM playlist_tracks pt
@@ -889,7 +1302,10 @@ class MainWindow(QMainWindow):
             self._load_episodes_view()
             return
         elif view.startswith('podcast:'):
-            pod_id = int(view.split(':')[1])
+            try:
+                pod_id = int(view.split(':')[1])
+            except (IndexError, ValueError):
+                return
             self._load_episodes_view(pod_id)
             return
         else:
@@ -998,117 +1414,66 @@ class MainWindow(QMainWindow):
         self._populate_episodes_table(episodes)
 
     def _populate_episodes_table(self, episodes):
-        """Fill table with podcast episodes."""
-        self._track_table.setSortingEnabled(False)
-        self._track_table.setRowCount(0)
-        self._track_table.setColumnCount(len(EPISODE_COLUMNS))
-        self._track_table.setHorizontalHeaderLabels([T(c[0]) for c in EPISODE_COLUMNS])
+        """Fill table with podcast episodes using episode model."""
+        self._episode_mode = True
+        ep_list = []
+        for row_data in episodes:
+            ep = dict(row_data)
+            ep['_is_episode'] = True
+            ep_list.append(ep)
+
+        self._all_tracks_cache = ep_list
+
+        # Switch to episode model
+        if not hasattr(self, '_episode_model'):
+            self._episode_model = EpisodeTableModel(self)
+        self._episode_model.setEpisodes(ep_list)
+        self._track_table.setModel(self._episode_model)
+
+        # Set column widths
         for i, (_, _, w) in enumerate(EPISODE_COLUMNS):
             self._track_table.setColumnWidth(i, w)
         header = self._track_table.horizontalHeader()
         header.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+        # Show all episode columns
+        for i in range(len(EPISODE_COLUMNS)):
+            self._track_table.setColumnHidden(i, False)
 
-        self._all_tracks_cache = []
-        for row_data in episodes:
-            ep = dict(row_data)
-            ep['_is_episode'] = True
-            self._all_tracks_cache.append(ep)
-
-        self._track_table.setRowCount(len(self._all_tracks_cache))
-        for row, ep in enumerate(self._all_tracks_cache):
-            for col, (_, key, _) in enumerate(EPISODE_COLUMNS):
-                val = ep.get(key, '')
-                if key == 'duration_ms':
-                    text = format_duration(val)
-                elif key == 'published_at':
-                    text = str(val)[:10] if val else ''
-                elif key == 'listened':
-                    text = '✓' if val else ''
-                elif key == 'file_path':
-                    text = '💾' if val else ''
-                else:
-                    text = str(val) if val else ''
-
-                item = QTableWidgetItem(text)
-                item.setData(Qt.ItemDataRole.UserRole, ep)
-                if key in ('duration_ms', 'listened', 'file_path', 'published_at'):
-                    item.setTextAlignment(
-                        Qt.AlignmentFlag.AlignCenter | Qt.AlignmentFlag.AlignVCenter
-                    )
-                self._track_table.setItem(row, col, item)
-
-        self._track_table.setSortingEnabled(True)
-        self._update_view_stats(self._all_tracks_cache)
+        self._update_view_stats(ep_list)
 
     def _update_view_stats(self, items):
         """Update status bar with totals for current view."""
         total_duration = sum(t.get('duration_ms', 0) or 0 for t in items)
         total_size = sum(t.get('file_size', 0) or 0 for t in items)
         count = len(items)
-        parts = [T('total_tracks', count=count)]
+        lang = get_lang()
+        label = 'pistes' if lang == 'fr' else 'tracks'
+        count_str = f"{count:,}".replace(',', ' ')
+        parts = [f"{count_str} {label}"]
         if total_duration > 0:
-            parts.append(T('total_duration', duration=format_duration_long(total_duration)))
+            parts.append(format_duration_long(total_duration))
         if total_size > 0:
-            parts.append(T('total_size', size=format_size(total_size)))
+            parts.append(format_size(total_size))
         self._status_bar.showMessage(' | '.join(parts))
 
     def _populate_table(self, tracks):
-        """Fill the track table with data."""
-        self._track_table.setSortingEnabled(False)
-        self._track_table.setRowCount(0)
-
-        # Restore music columns if coming from podcast view
-        if self._track_table.columnCount() != len(COLUMNS):
-            self._track_table.setColumnCount(len(COLUMNS))
-            self._track_table.setHorizontalHeaderLabels([T(c[0]) for c in COLUMNS])
-            for i, (_, _, w) in enumerate(COLUMNS):
+        """Fill track table — instant via model (no widget items created)."""
+        # Switch back from episode model if needed
+        if self._episode_mode:
+            self._episode_mode = False
+            self._track_table.setModel(self._track_model)
+            # Restore track column widths and visibility
+            for i, (_, key, w, _) in enumerate(ALL_COLUMNS):
                 self._track_table.setColumnWidth(i, w)
+                self._track_table.setColumnHidden(i, key not in self._visible_columns)
             header = self._track_table.horizontalHeader()
-            header.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
+            for i, (_, key, _, _) in enumerate(ALL_COLUMNS):
+                if key == 'title':
+                    header.setSectionResizeMode(i, QHeaderView.ResizeMode.Stretch)
+                    break
 
-        self._all_tracks_cache = []
-        for row_data in tracks:
-            track = dict(row_data)
-            self._all_tracks_cache.append(track)
-
-        self._track_table.setRowCount(len(self._all_tracks_cache))
-
-        for row, track in enumerate(self._all_tracks_cache):
-            for col, (_, key, _) in enumerate(COLUMNS):
-                val = track.get(key, '')
-
-                if key == 'duration_ms':
-                    text = format_duration(val)
-                elif key == 'bitrate':
-                    text = format_bitrate(val)
-                elif key == 'sample_rate':
-                    text = format_sample_rate(val)
-                elif key == 'bit_depth':
-                    text = f"{val}-bit" if val else ''
-                elif key == 'track_number':
-                    text = str(val) if val else ''
-                elif key == 'year':
-                    text = str(val) if val else ''
-                elif key == 'play_count':
-                    text = str(val) if val else ''
-                elif key == 'rating':
-                    text = '★' * val if val else ''
-                else:
-                    text = str(val) if val else ''
-
-                item = QTableWidgetItem(text)
-                item.setData(Qt.ItemDataRole.UserRole, track)
-
-                # Right-align numeric columns
-                if key in ('track_number', 'duration_ms', 'bitrate',
-                           'sample_rate', 'bit_depth', 'play_count', 'year'):
-                    item.setTextAlignment(
-                        Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
-                    )
-
-                self._track_table.setItem(row, col, item)
-
-        self._track_table.setSortingEnabled(True)
+        self._all_tracks_cache = [dict(row_data) for row_data in tracks]
+        self._track_model.setTracks(self._all_tracks_cache)
         self._update_view_stats(self._all_tracks_cache)
 
     # --- Event handlers ---
@@ -1138,11 +1503,26 @@ class MainWindow(QMainWindow):
         else:
             self._load_view(view_id)
 
-    def _on_track_double_click(self, row, col):
+    def _get_visual_queue(self):
+        """Build playback queue from current model order (cached)."""
+        model = self._track_table.model()
+        if not model:
+            return []
+        # Use the backing list directly instead of iterating model.data()
+        if isinstance(model, TrackTableModel):
+            return list(model.tracks())
+        # Fallback for episode model
+        return [model.data(model.index(r, 0), Qt.ItemDataRole.UserRole)
+                for r in range(model.rowCount())]
+
+    def _on_track_double_click(self, index):
         """Play track or episode on double-click."""
-        if row < 0 or row >= len(self._all_tracks_cache):
+        if not index.isValid():
             return
-        track = self._all_tracks_cache[row]
+        model = self._track_table.model()
+        track = model.data(index, Qt.ItemDataRole.UserRole)
+        if not track:
+            return
 
         # For podcast episodes, use file_path if downloaded
         if track.get('_is_episode'):
@@ -1150,7 +1530,6 @@ class MainWindow(QMainWindow):
             if not fp:
                 self._status_bar.showMessage(T('podcast_download') + '...', 3000)
                 return
-            # Play episode as a track
             ep_track = {
                 'file_path': fp,
                 'title': track.get('title', ''),
@@ -1159,7 +1538,6 @@ class MainWindow(QMainWindow):
                 'duration_ms': track.get('duration_ms', 0),
             }
             self._player.play_track(ep_track)
-            # Mark as listened
             if track.get('id'):
                 db.execute(
                     "UPDATE podcast_episodes SET listened = 1, listened_at = datetime('now') WHERE id = ?",
@@ -1167,7 +1545,9 @@ class MainWindow(QMainWindow):
                 )
             return
 
-        self._player.play_track(track, queue=self._all_tracks_cache, index=row)
+        # Build queue from current model (sorted) order
+        visual_queue = self._get_visual_queue()
+        self._player.play_track(track, queue=visual_queue, index=index.row())
 
     def _on_search(self):
         """Handle search input."""
@@ -1510,10 +1890,10 @@ class MainWindow(QMainWindow):
 
     def _on_fetch_metadata(self):
         """Fetch metadata from MusicBrainz."""
-        selected = self._track_table.selectedItems()
+        model = self._track_table.model()
         track_ids = set()
-        for item in selected:
-            track = item.data(Qt.ItemDataRole.UserRole)
+        for index in self._track_table.selectionModel().selectedRows():
+            track = model.data(index, Qt.ItemDataRole.UserRole)
             if track and isinstance(track, dict) and 'id' in track:
                 track_ids.add(track['id'])
 
@@ -1574,36 +1954,59 @@ class MainWindow(QMainWindow):
     # --- Context menu ---
 
     def _on_track_context_menu(self, pos):
-        """Show context menu for track table."""
-        row = self._track_table.rowAt(pos.y())
-        if row < 0 or row >= len(self._all_tracks_cache):
+        """Show context menu for track table — supports multi-selection."""
+        index = self._track_table.indexAt(pos)
+        if not index.isValid():
+            return
+        model = self._track_table.model()
+
+        # Gather all selected tracks
+        selected_indexes = self._track_table.selectionModel().selectedRows()
+        selected_tracks = []
+        for idx in selected_indexes:
+            t = model.data(idx, Qt.ItemDataRole.UserRole)
+            if t and isinstance(t, dict):
+                selected_tracks.append(t)
+        if not selected_tracks:
             return
 
-        track = self._all_tracks_cache[row]
-        menu = QMenu(self)
+        track = selected_tracks[0]
+        row = index.row()
+        multi = len(selected_tracks) > 1
 
+        menu = QMenu(self)
+        visual_queue = self._get_visual_queue()
+
+        # Play actions (always use clicked track, not selection)
         act_play = menu.addAction(T('play_now'))
         act_play.triggered.connect(
-            lambda: self._player.play_track(track, queue=self._all_tracks_cache, index=row)
+            lambda: self._player.play_track(track, queue=visual_queue, index=row)
         )
 
         act_next = menu.addAction(T('play_next'))
         act_next.triggered.connect(lambda: self._player.add_to_queue(track))
 
         act_queue = menu.addAction(T('add_to_queue'))
-        act_queue.triggered.connect(lambda: self._player.add_to_queue(track))
+        if multi:
+            act_queue.triggered.connect(
+                lambda: [self._player.add_to_queue(t) for t in selected_tracks]
+            )
+        else:
+            act_queue.triggered.connect(lambda: self._player.add_to_queue(track))
 
         menu.addSeparator()
 
-        # Add to playlist submenu
+        # Add to playlist submenu (adds all selected tracks)
         pl_menu = menu.addMenu(T('add_to_playlist'))
         playlists = db.fetchall("SELECT id, name FROM playlists ORDER BY name")
         for pl in playlists:
             act = pl_menu.addAction(pl['name'])
             pl_id = pl['id']
-            track_id = track.get('id')
+            track_ids = [t.get('id') for t in selected_tracks if t.get('id')]
             act.triggered.connect(
-                lambda checked, pid=pl_id, tid=track_id: self._add_track_to_playlist(pid, tid)
+                lambda checked, pid=pl_id, tids=track_ids: [
+                    self._add_track_to_playlist(pid, tid) for tid in tids
+                ]
             )
         if playlists:
             pl_menu.addSeparator()
@@ -1612,18 +2015,93 @@ class MainWindow(QMainWindow):
 
         menu.addSeparator()
 
-        act_info = menu.addAction(T('track_info'))
-        act_info.triggered.connect(lambda: self._show_track_info(track))
+        # Edit metadata (adapts to single/multi)
+        act_edit = menu.addAction(T('edit_metadata'))
+        act_edit.setToolTip(T('edit_metadata_tip'))
+        tracks_copy = list(selected_tracks)
+        act_edit.triggered.connect(lambda: self._edit_track_metadata(tracks_copy))
+
+        # Fetch metadata online
+        act_fetch = menu.addAction(T('fetch_metadata'))
+        act_fetch.triggered.connect(self._on_fetch_metadata)
+
+        menu.addSeparator()
+
+        # Track info (single only)
+        if not multi:
+            act_info = menu.addAction(T('track_info'))
+            act_info.triggered.connect(lambda: self._show_track_info(track))
 
         act_explorer = menu.addAction(T('show_in_explorer'))
         act_explorer.triggered.connect(lambda: self._show_in_explorer(track))
 
-        if track.get('play_count', 0) > 0:
+        # Reset play count
+        has_plays = any(t.get('play_count', 0) > 0 for t in selected_tracks)
+        if has_plays:
             menu.addSeparator()
             act_reset = menu.addAction(T('reset_play_count'))
-            act_reset.triggered.connect(lambda: self._reset_track_play_count(track))
+            if multi:
+                act_reset.triggered.connect(
+                    lambda: [self._reset_track_play_count(t) for t in selected_tracks]
+                )
+            else:
+                act_reset.triggered.connect(lambda: self._reset_track_play_count(track))
 
         menu.exec(self._track_table.viewport().mapToGlobal(pos))
+
+    def _on_header_context_menu(self, pos):
+        """Show column visibility chooser on header right-click."""
+        menu = QMenu(self)
+
+        # Add checkbox action for each column
+        for i, (i18n_key, db_key, _, _) in enumerate(ALL_COLUMNS):
+            # Title column cannot be hidden
+            if db_key == 'title':
+                continue
+            act = menu.addAction(T(i18n_key))
+            act.setCheckable(True)
+            act.setChecked(db_key in self._visible_columns)
+            act.triggered.connect(lambda checked, idx=i, key=db_key: self._toggle_column(idx, key, checked))
+
+        menu.addSeparator()
+
+        # Show all columns
+        act_all = menu.addAction(T('show_all_columns'))
+        act_all.triggered.connect(self._show_all_columns)
+
+        # Reset to default
+        act_reset = menu.addAction(T('reset_columns'))
+        act_reset.triggered.connect(self._reset_columns)
+
+        menu.exec(self._track_table.horizontalHeader().mapToGlobal(pos))
+
+    def _toggle_column(self, col_idx, db_key, visible):
+        """Toggle a column's visibility."""
+        if visible:
+            self._visible_columns.add(db_key)
+        else:
+            self._visible_columns.discard(db_key)
+        self._track_table.setColumnHidden(col_idx, not visible)
+        self._save_column_visibility()
+
+    def _show_all_columns(self):
+        """Show all available columns."""
+        for i, (_, db_key, _, _) in enumerate(ALL_COLUMNS):
+            self._visible_columns.add(db_key)
+            self._track_table.setColumnHidden(i, False)
+        self._save_column_visibility()
+
+    def _reset_columns(self):
+        """Reset columns to defaults."""
+        self._visible_columns = set(DEFAULT_VISIBLE)
+        for i, (_, db_key, _, _) in enumerate(ALL_COLUMNS):
+            self._track_table.setColumnHidden(i, db_key not in self._visible_columns)
+        self._save_column_visibility()
+
+    def _save_column_visibility(self):
+        """Persist column visibility to QSettings."""
+        settings = QSettings('MusicOtheque', 'MusicOtheque')
+        settings.setValue('visible_columns', list(self._visible_columns))
 
     def _add_track_to_playlist(self, playlist_id, track_id):
         """Add a track to a playlist."""
@@ -1709,6 +2187,90 @@ class MainWindow(QMainWindow):
             subprocess.Popen(['open', '-R', fp])
         else:
             subprocess.Popen(['xdg-open', folder])
+
+    def _edit_track_metadata(self, tracks):
+        """Open iTunes-style metadata editor for single or multiple tracks."""
+        dlg = MetadataEditDialog(tracks, parent=self)
+        if dlg.exec() != QDialog.DialogCode.Accepted:
+            return
+        changes = dlg.get_changes()
+        if not changes:
+            return
+
+        # Whitelist valid DB columns to prevent SQL injection via key names
+        _VALID_DB_KEYS = {f[1] for f in _SINGLE_FIELDS}
+        safe_changes = {k: v for k, v in changes.items() if k in _VALID_DB_KEYS}
+        if not safe_changes:
+            return
+
+        # Pre-build scanner updates once (same for all tracks)
+        scanner_updates = {}
+        for db_key, val in safe_changes.items():
+            scanner_key = _DB_TO_SCANNER.get(db_key)
+            if scanner_key:
+                scanner_updates[scanner_key] = str(val) if val else ''
+
+        # Pre-build SQL once (same columns for all tracks)
+        set_clause = ', '.join(f"{k} = ?" for k in safe_changes)
+        base_values = list(safe_changes.values())
+
+        self._status_bar.showMessage(T('meta_writing_files'))
+
+        errors = 0
+        updated_count = 0
+        total = len(tracks)
+
+        for i, track in enumerate(tracks):
+            track_id = track.get('id')
+            fp = track.get('file_path', '')
+
+            # Update database (batch commit every 50)
+            if track_id:
+                values = base_values + [track_id]
+                try:
+                    db.execute(
+                        f"UPDATE tracks SET {set_clause} WHERE id = ?",
+                        values, commit=False
+                    )
+                except Exception as e:
+                    log.warning("DB update failed for track %s: %s", track_id, e)
+
+            # Write to file via mutagen
+            if fp and scanner_updates and os.path.exists(fp):
+                try:
+                    write_metadata(fp, scanner_updates)
+                except Exception as e:
+                    log.warning("Failed to write metadata to %s: %s", fp, e)
+                    errors += 1
+
+            # Update in-memory cache
+            for db_key, val in safe_changes.items():
+                track[db_key] = val
+
+            updated_count += 1
+
+            # Batch commit + keep UI responsive every 50 tracks
+            if (i + 1) % 50 == 0:
+                db.commit()
+                self._status_bar.showMessage(
+                    f"{T('meta_writing_files')} {i + 1}/{total}")
+                QApplication.processEvents()
+
+        # Final commit
+        db.commit()
+
+        # Refresh display
+        self._track_model.layoutChanged.emit()
+
+        if errors:
+            self._status_bar.showMessage(
+                T('meta_save_success', count=updated_count) + ' | ' +
+                T('meta_save_error', count=errors), 8000
+            )
+        else:
+            self._status_bar.showMessage(
+                T('meta_save_success', count=updated_count), 5000
+            )
 
     # --- Watcher handlers ---
 
@@ -2329,6 +2891,12 @@ class MainWindow(QMainWindow):
             self._status_bar.showMessage(T('no_results'), 3000)
             return
 
+        total = len(tracks)
+        self._status_bar.showMessage(T('classify_running'))
+        self._progress_bar.setValue(0)
+        self._progress_bar.setMaximum(total)
+        self._progress_bar.show()
+
         # Classify all tracks and store in DB
         period_counts = {}
         form_counts = {}
@@ -2361,10 +2929,16 @@ class MainWindow(QMainWindow):
             if cl['form']:
                 form_counts[cl['form']] = form_counts.get(cl['form'], 0) + 1
 
-            if (i + 1) % 2000 == 0:
+            # Batch commit + keep UI responsive every 500 tracks
+            if (i + 1) % 500 == 0:
                 db.commit()
+                self._progress_bar.setValue(i + 1)
+                self._status_bar.showMessage(
+                    T('classify_running') + f" {i + 1}/{total}")
+                QApplication.processEvents()
 
         db.commit()
+        self._progress_bar.hide()
 
         # Refresh sidebar to show periods
         self._build_sidebar()

@@ -359,6 +359,30 @@ def main():
     window = MainWindow()
     window.show()
 
+    # Offer desktop shortcut on first launch
+    # (json already imported at top)
+    _cfg_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), '.shortcut_config.json')
+    def _get_cfg(k):
+        try:
+            with open(_cfg_path, encoding='utf-8') as f:
+                return json.load(f).get(k)
+        except Exception:
+            return None
+    def _set_cfg(k, v):
+        try:
+            data = {}
+            if os.path.exists(_cfg_path):
+                with open(_cfg_path, encoding='utf-8') as f:
+                    data = json.load(f)
+            data[k] = v
+            with open(_cfg_path, 'w', encoding='utf-8') as f:
+                json.dump(data, f)
+        except Exception:
+            pass
+    from shortcut_helper import offer_shortcut
+    offer_shortcut("MusicOthèque", "musicotheque.py", "logo.ico",
+                   get_config=_get_cfg, set_config=_set_cfg)
+
     logging.info("%s ready", APP_NAME)
     sys.exit(app.exec())
 

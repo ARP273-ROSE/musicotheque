@@ -826,11 +826,17 @@ _ALBUM_ENCODING_PATTERNS = [
 # Compiled album encoding patterns
 _ALBUM_ENCODING_RE = [re.compile(p, re.IGNORECASE) for p in _ALBUM_ENCODING_PATTERNS]
 
-# Disc/CD normalization pattern
+# Disc/CD normalization pattern (after separator: "Title - CD 3")
 _DISC_PATTERN = re.compile(
     r'\s*[-–—]\s*'
     r'(?:CD|Disc|Disk|Vol\.?|Volume)\s*'
     r'(\d+)',
+    re.IGNORECASE
+)
+
+# CD prefix at start of album title: "CD 001 Symphonies...", "CD03 Die Feen..."
+_CD_PREFIX_PATTERN = re.compile(
+    r'^(?:CD|Cd|cd|DISC|Disc|disc)\s*(\d+)\s*[-:.]?\s+',
     re.IGNORECASE
 )
 
@@ -1181,12 +1187,21 @@ def normalize_album_title(title):
 
     # Extract disc info before removing it
     disc_info = None
-    disc_match = _DISC_PATTERN.search(title)
-    if disc_match:
-        disc_num = disc_match.group(1)
+
+    # Check for CD prefix at start of title: "CD 001 Symphonies..." -> "Symphonies..."
+    cd_prefix_match = _CD_PREFIX_PATTERN.match(title)
+    if cd_prefix_match:
+        disc_num = cd_prefix_match.group(1).lstrip('0') or '1'
         disc_info = f"CD {disc_num}"
-        # Remove the disc pattern from title
-        title = _DISC_PATTERN.sub('', title)
+        title = title[cd_prefix_match.end():]
+
+    # Check for disc info after separator: "Title - CD 3"
+    if not disc_info:
+        disc_match = _DISC_PATTERN.search(title)
+        if disc_match:
+            disc_num = disc_match.group(1)
+            disc_info = f"CD {disc_num}"
+            title = _DISC_PATTERN.sub('', title)
 
     # Remove catalog number prefixes
     title = _CATALOG_PREFIX_RE.sub('', title)

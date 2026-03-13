@@ -31,6 +31,8 @@ class LibraryWatcher(QObject):
     Uses polling (no OS-specific watchers) so it works reliably on:
     - Local drives, NAS/SMB shares, drive letter changes
     - Windows, Linux, macOS
+
+    All signals are thread-safe (pyqtSignal auto-queued across threads).
     """
 
     # Emitted when changes are detected (added_count, modified_count, removed_count)
@@ -46,8 +48,10 @@ class LibraryWatcher(QObject):
         self._timer.timeout.connect(self._poll)
         self._last_scan_time = 0
         self._running = False
+        self._checking = False  # Prevent concurrent checks
         self._known_files = {}  # path -> mtime snapshot
         self._files_lock = threading.Lock()
+        self._check_lock = threading.Lock()
 
     def start(self):
         """Start watching."""
@@ -86,6 +90,11 @@ class LibraryWatcher(QObject):
         if now - self._last_scan_time < MIN_SCAN_INTERVAL_S:
             return
 
+        # Prevent concurrent checks (race condition guard)
+        with self._check_lock:
+            if self._checking:
+                return
+            self._checking = True
         threading.Thread(target=self._check_changes, daemon=True).start()
 
     def _check_changes(self):
@@ -144,10 +153,10 @@ class LibraryWatcher(QObject):
             if added > 0 or modified > 0 or removed > 0:
                 log.info("Watcher detected changes: +%d ~%d -%d", added, modified, removed)
                 self._last_scan_time = time.time()
-                # Emit signal on main thread via QTimer
-                QTimer.singleShot(0, lambda: self.changes_detected.emit(added, modified, removed))
+                # pyqtSignal.emit() is thread-safe (auto-queued to main thread)
+                self.changes_detected.emit(added, modified, removed)
                 if changed_folders:
-                    QTimer.singleShot(0, lambda: self.scan_requested.emit(list(changed_folders)))
+                    self.scan_requested.emit(list(changed_folders))
 
                 # Update snapshot
                 self._build_snapshot()
@@ -155,6 +164,8 @@ class LibraryWatcher(QObject):
         except Exception as e:
             log.warning("Watcher check failed: %s", e)
         finally:
+            with self._check_lock:
+                self._checking = False
             db.close_connection()
 
     def _try_auto_relocate(self, missing_folder):
@@ -180,8 +191,7 @@ class LibraryWatcher(QObject):
                         if count > 0:
                             log.info("Auto-relocated: %s -> %s (%d tracks)",
                                      missing_folder, candidate, count)
-                            QTimer.singleShot(0, lambda mf=missing_folder, c=candidate, n=count:
-                                              self.paths_relocated.emit(mf, c, n))
+                            self.paths_relocated.emit(missing_folder, candidate, count)
                         return
 
             # Strategy 2: Check if the folder tail exists under other scan folders
@@ -201,8 +211,7 @@ class LibraryWatcher(QObject):
                         if count > 0:
                             log.info("Auto-relocated via common root: %s -> %s (%d tracks)",
                                      missing_folder, candidate, count)
-                            QTimer.singleShot(0, lambda mf=missing_folder, c=candidate, n=count:
-                                              self.paths_relocated.emit(mf, c, n))
+                            self.paths_relocated.emit(missing_folder, candidate, count)
                         return
 
         except Exception as e:
@@ -224,6 +233,10 @@ class LibraryWatcher(QObject):
     def force_check(self):
         """Force an immediate check (called after user actions)."""
         self._last_scan_time = 0
+        with self._check_lock:
+            if self._checking:
+                return
+            self._checking = True
         threading.Thread(target=self._check_changes, daemon=True).start()
 
 

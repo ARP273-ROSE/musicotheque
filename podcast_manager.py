@@ -76,6 +76,12 @@ def _validate_url(url: str) -> str:
     if not parsed.netloc:
         raise ValueError("URL has no host")
 
+    # Anti-SSRF: block localhost and private networks
+    hostname = (parsed.hostname or '').lower()
+    _FORBIDDEN = {'localhost', '127.0.0.1', '::1', '0.0.0.0', '[::1]'}
+    if hostname in _FORBIDDEN or hostname.startswith('10.') or hostname.startswith('192.168.'):
+        raise ValueError(f"Access to internal host forbidden: {hostname!r}")
+
     return url
 
 
@@ -189,11 +195,16 @@ def parse_rss_feed(feed_url: str) -> dict:
 
     log.info("Parsing RSS feed: %s", feed_url)
 
-    # feedparser handles HTTP internally; we pass user-agent
-    feed = feedparser.parse(
-        feed_url,
-        agent=_USER_AGENT,
-    )
+    # Fetch with timeout (feedparser has no timeout param), then parse content
+    import urllib.request
+    try:
+        req = urllib.request.Request(feed_url, headers={'User-Agent': _USER_AGENT})
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            feed_content = resp.read(10 * 1024 * 1024)  # 10MB max
+    except Exception as e:
+        raise RuntimeError(f"Failed to fetch RSS feed: {e}")
+
+    feed = feedparser.parse(feed_content)
 
     if feed.bozo and not feed.entries:
         bozo_msg = str(getattr(feed, "bozo_exception", "Unknown parse error"))

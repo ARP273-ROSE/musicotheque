@@ -16,9 +16,17 @@ if not exist "venv\Scripts\activate.bat" (
     python -m venv venv
 )
 
-REM Activate and install
+REM Activate venv
 call venv\Scripts\activate.bat
-pip install -q -r requirements.txt
 
-REM Launch
+REM Install deps only once (re-install if requirements.txt changes)
+set "MARKER=venv\.deps_installed"
+if exist "%MARKER%" (
+    fc /b requirements.txt "%MARKER%" >nul 2>&1 && goto :launch
+)
+echo Installing dependencies...
+pip install -q -r requirements.txt
+copy /y requirements.txt "%MARKER%" >nul 2>&1
+
+:launch
 python musicotheque.py %*

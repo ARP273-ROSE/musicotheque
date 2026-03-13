@@ -74,7 +74,7 @@ class AudioPlayer(QObject):
         self._queue = []           # list of track dicts
         self._original_queue = []  # pre-shuffle order
         self._current_index = -1
-        self._history = []         # for back navigation
+        self._history = []         # for back navigation (capped at 500)
 
         # State
         self._repeat = RepeatMode.OFF
@@ -84,6 +84,7 @@ class AudioPlayer(QObject):
         self._state = PlayerState.STOPPED
         self._streaming = False          # True when playing web radio
         self._current_station = None     # Current radio station dict
+        self._reconnect_count = 0        # Stream reconnect attempts
 
         # Apply initial volume
         self._audio_output.setVolume(self._volume / 100.0)
@@ -252,10 +253,14 @@ class AudioPlayer(QObject):
 
         if self._current_index < len(self._queue) - 1:
             self._history.append(self._current_index)
+            if len(self._history) > 500:
+                self._history = self._history[-500:]
             self._current_index += 1
             self._load_and_play(self.current_track)
         elif self._repeat == RepeatMode.ALL:
             self._history.append(self._current_index)
+            if len(self._history) > 500:
+                self._history = self._history[-500:]
             self._current_index = 0
             self._load_and_play(self.current_track)
         else:
@@ -337,11 +342,16 @@ class AudioPlayer(QObject):
         self.queue_changed.emit()
 
     def add_to_queue(self, tracks):
-        """Append tracks to the end of the queue."""
+        """Append tracks to the end of the queue (capped at 10000)."""
         if isinstance(tracks, dict):
             tracks = [tracks]
-        self._queue.extend(tracks)
-        self._original_queue.extend(tracks)
+        max_queue = 10000
+        remaining = max_queue - len(self._queue)
+        if remaining <= 0:
+            return
+        to_add = tracks[:remaining]
+        self._queue.extend(to_add)
+        self._original_queue.extend(to_add)
         self.queue_changed.emit()
 
     # --- Audio Device Management ---
@@ -521,10 +531,14 @@ class AudioPlayer(QObject):
 
         if self._current_index < len(self._queue) - 1:
             self._history.append(self._current_index)
+            if len(self._history) > 500:
+                self._history = self._history[-500:]
             self._current_index += 1
             self._load_and_play(self.current_track)
         elif self._repeat == RepeatMode.ALL and self._queue:
             self._history.append(self._current_index)
+            if len(self._history) > 500:
+                self._history = self._history[-500:]
             self._current_index = 0
             self._load_and_play(self.current_track)
         else:
