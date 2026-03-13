@@ -280,6 +280,8 @@ def _migrate(conn):
         'movement': 'TEXT',
         'sub_period': 'TEXT',
     }
+    # SAFETY: col and typ are from hardcoded new_cols dict above — never user input.
+    # SQLite does not support parameterized DDL (column names), so f-string is required here.
     for col, typ in new_cols.items():
         if col not in columns:
             conn.execute(f"ALTER TABLE tracks ADD COLUMN {col} {typ}")

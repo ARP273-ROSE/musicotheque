@@ -72,11 +72,15 @@ def backup_database(db_path, backup_dir, label='auto'):
 
 def _rotate_backups(backup_dir, label):
     """Keep only MAX_DAILY_BACKUPS recent + MAX_WEEKLY_BACKUPS weekly backups."""
-    backups = sorted(
-        backup_dir.glob(f"musicotheque_{label}_*.db"),
-        key=lambda p: p.stat().st_mtime,
-        reverse=True
-    )
+    # Single stat() per file for rotation
+    entries = []
+    for bp in backup_dir.glob(f"musicotheque_{label}_*.db"):
+        try:
+            st = bp.stat()
+            entries.append((bp, st.st_mtime))
+        except OSError:
+            continue
+    entries.sort(key=lambda x: x[1], reverse=True)
 
     # Keep first MAX_DAILY_BACKUPS as-is
     # Beyond that, keep one per week up to MAX_WEEKLY_BACKUPS
@@ -84,13 +88,12 @@ def _rotate_backups(backup_dir, label):
     weekly_kept = 0
     seen_weeks = set()
 
-    for bp in backups:
+    for bp, mtime in entries:
         if kept < MAX_DAILY_BACKUPS:
             kept += 1
             continue
 
         # Check week number
-        mtime = bp.stat().st_mtime
         week = time.strftime('%Y-W%W', time.localtime(mtime))
 
         if week not in seen_weeks and weekly_kept < MAX_WEEKLY_BACKUPS:
@@ -116,6 +119,11 @@ def restore_database(backup_path, db_path):
 
     if not backup_path.exists():
         log.error("Backup not found: %s", backup_path)
+        return False
+
+    # Validate backup file extension and reject null bytes
+    if '\x00' in str(backup_path) or backup_path.suffix.lower() != '.db':
+        log.error("Invalid backup path: %s", backup_path)
         return False
 
     tmp_path = db_path.parent / f".tmp_restore_{db_path.name}"
@@ -148,13 +156,21 @@ def list_backups(backup_dir):
         return []
 
     backups = []
-    for bp in sorted(backup_dir.glob("musicotheque_*.db"),
-                     key=lambda p: p.stat().st_mtime, reverse=True):
+    # Single stat() per file (avoid redundant I/O)
+    entries = []
+    for bp in backup_dir.glob("musicotheque_*.db"):
+        try:
+            st = bp.stat()
+            entries.append((bp, st))
+        except OSError:
+            continue
+    entries.sort(key=lambda x: x[1].st_mtime, reverse=True)
+    for bp, st in entries:
         backups.append({
             'path': str(bp),
             'name': bp.name,
-            'size': bp.stat().st_size,
+            'size': st.st_size,
             'date': time.strftime('%Y-%m-%d %H:%M:%S',
-                                  time.localtime(bp.stat().st_mtime)),
+                                  time.localtime(st.st_mtime)),
         })
     return backups

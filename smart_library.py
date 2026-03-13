@@ -176,9 +176,10 @@ def scan_folder(folder, batch_size=200):
                 break  # Success, exit retry loop
             except sqlite3.OperationalError as e:
                 if 'locked' in str(e) and _attempt < 4:
-                    log.warning("DB locked at %d/%d, retry %d/5 in 10s...",
-                                i + 1, total, _attempt + 2)
-                    time.sleep(10)
+                    wait = 2 ** _attempt  # Exponential backoff: 1, 2, 4, 8s
+                    log.warning("DB locked at %d/%d, retry %d/5 in %ds...",
+                                i + 1, total, _attempt + 2, wait)
+                    time.sleep(wait)
                 else:
                     raise
 
@@ -800,7 +801,11 @@ def main():
     import platform
 
     # Determine folder
-    folder = sys.argv[1] if len(sys.argv) > 1 else 'P:/Musique'
+    if len(sys.argv) < 2:
+        print("Usage: python smart_library.py <music_folder>")
+        print("Example: python smart_library.py P:/Musique")
+        sys.exit(1)
+    folder = sys.argv[1]
 
     if not os.path.isdir(folder):
         log.error("Folder not found: %s", folder)

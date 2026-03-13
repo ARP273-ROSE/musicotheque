@@ -395,7 +395,9 @@ class ScanWorker(QObject):
                 if self._cancelled:
                     break
 
-                self.progress.emit(i + 1, total, os.path.basename(fpath))
+                # Throttle progress updates (every 50 files) to reduce signal overhead
+                if (i + 1) % 50 == 0 or i == 0 or i + 1 == total:
+                    self.progress.emit(i + 1, total, os.path.basename(fpath))
                 norm_path = os.path.normpath(fpath)
                 seen_paths.add(norm_path)
 

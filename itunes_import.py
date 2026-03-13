@@ -23,10 +23,17 @@ def parse_itunes_location(location):
         # Windows: remove leading / from /C:/...
         if len(path) > 2 and path[0] == '/' and path[2] == ':':
             path = path[1:]
+        # Reject null bytes and path traversal
+        if '\x00' in path or '..' in path.replace('\\', '/').split('/'):
+            log.warning("Rejected unsafe iTunes path: %s", location)
+            return None
         # Normalize
         return os.path.normpath(path)
     except Exception:
         return None
+
+# Maximum iTunes XML file size (1 GB)
+_MAX_XML_SIZE = 1024 * 1024 * 1024
 
 
 def parse_itunes_xml(xml_path):
@@ -37,6 +44,11 @@ def parse_itunes_xml(xml_path):
         playlists: list of {name, tracks: [track_ids]}
     """
     log.info("Parsing iTunes XML: %s", xml_path)
+
+    # Size check to prevent DoS on malicious files
+    file_size = os.path.getsize(xml_path)
+    if file_size > _MAX_XML_SIZE:
+        raise ValueError(f"iTunes XML too large ({file_size / 1e9:.1f} GB > 1 GB limit)")
 
     with open(xml_path, 'rb') as f:
         plist = plistlib.load(f)
@@ -307,6 +319,10 @@ def parse_itunes_podcasts(xml_path):
         podcasts: dict of show_name -> {episodes: [{name, artist, location, duration_ms, ...}]}
     """
     log.info("Parsing iTunes podcasts from: %s", xml_path)
+
+    file_size = os.path.getsize(xml_path)
+    if file_size > _MAX_XML_SIZE:
+        raise ValueError(f"iTunes XML too large ({file_size / 1e9:.1f} GB > 1 GB limit)")
 
     with open(xml_path, 'rb') as f:
         plist = plistlib.load(f)

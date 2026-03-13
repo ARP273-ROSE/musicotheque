@@ -112,6 +112,13 @@ class FileOrganizer(QObject):
                     ext
                 )
 
+                # Path traversal protection
+                if not str(target.resolve()).startswith(
+                        str(Path(self._dest_dir).resolve())):
+                    log.warning("Path traversal blocked: %s", target)
+                    errors += 1
+                    continue
+
                 # Skip if already in correct location
                 if os.path.normpath(src) == os.path.normpath(str(target)):
                     continue

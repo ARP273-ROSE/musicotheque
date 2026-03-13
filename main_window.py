@@ -1697,7 +1697,10 @@ class MainWindow(QMainWindow):
     def _show_in_explorer(self, track):
         """Open file explorer at the track's location."""
         fp = track.get('file_path', '')
-        if not fp:
+        if not fp or '\x00' in fp:
+            return
+        if not os.path.exists(fp):
+            self._status_bar.showMessage(T('file_not_found'), 3000)
             return
         folder = os.path.dirname(fp)
         if platform.system() == 'Windows':
@@ -3685,11 +3688,13 @@ class SmartRadioDialog(QDialog):
                 "t.file_format IN ('FLAC','ALAC','WAV','AIFF','APE','WV','TTA')"
             )
         elif quality == 'lossless':
-            fmt_list = ','.join(f"'{f}'" for f in LOSSLESS_FORMATS)
-            conditions.append(f"t.file_format IN ({fmt_list})")
+            placeholders = ','.join('?' * len(LOSSLESS_FORMATS))
+            conditions.append(f"t.file_format IN ({placeholders})")
+            params.extend(LOSSLESS_FORMATS)
         elif quality == 'lossy':
-            fmt_list = ','.join(f"'{f}'" for f in LOSSY_FORMATS)
-            conditions.append(f"t.file_format IN ({fmt_list})")
+            placeholders = ','.join('?' * len(LOSSY_FORMATS))
+            conditions.append(f"t.file_format IN ({placeholders})")
+            params.extend(LOSSY_FORMATS)
 
         # Rating
         min_rating = self._rating_combo.currentData()

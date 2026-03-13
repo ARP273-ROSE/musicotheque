@@ -53,15 +53,21 @@ def _mb_request(endpoint, params=None):
         return None
 
 
+def _escape_lucene(s):
+    """Escape Lucene special characters for MusicBrainz queries."""
+    special = r'+-&|!(){}[]^"~*?:\/'
+    return ''.join(f'\\{c}' if c in special else c for c in s)
+
+
 def search_recording(title, artist='', album='', limit=5):
     """Search MusicBrainz for a recording."""
     query_parts = []
     if title:
-        query_parts.append(f'recording:"{title}"')
+        query_parts.append(f'recording:"{_escape_lucene(title)}"')
     if artist:
-        query_parts.append(f'artist:"{artist}"')
+        query_parts.append(f'artist:"{_escape_lucene(artist)}"')
     if album:
-        query_parts.append(f'release:"{album}"')
+        query_parts.append(f'release:"{_escape_lucene(album)}"')
 
     if not query_parts:
         return []
@@ -146,9 +152,9 @@ def search_release(album, artist='', limit=5):
     """Search MusicBrainz for a release (album)."""
     query_parts = []
     if album:
-        query_parts.append(f'release:"{album}"')
+        query_parts.append(f'release:"{_escape_lucene(album)}"')
     if artist:
-        query_parts.append(f'artist:"{artist}"')
+        query_parts.append(f'artist:"{_escape_lucene(artist)}"')
 
     if not query_parts:
         return []

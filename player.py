@@ -165,7 +165,8 @@ class AudioPlayer(QObject):
             station: dict with 'name', 'url', 'country', etc.
         """
         url = station.get('url', '')
-        if not url:
+        if not url or not url.startswith(('http://', 'https://')):
+            log.warning("Rejected non-HTTP stream URL: %s", url)
             return
 
         self._streaming = True
