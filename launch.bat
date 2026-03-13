@@ -29,27 +29,28 @@ exit /b 1
 
 :found_python
 
-REM === Check if venv is valid for THIS machine ===
-if not exist "venv\Scripts\python.exe" goto :create_venv
-"venv\Scripts\python.exe" -c "print('ok')" >nul 2>&1
+REM === Venv local a chaque PC (pas dans le dossier NAS synchronise) ===
+set "VENV_DIR=%LOCALAPPDATA%\MusicOtheque\venv"
+
+REM === Check if venv exists and works ===
+if not exist "%VENV_DIR%\Scripts\python.exe" goto :create_venv
+"%VENV_DIR%\Scripts\python.exe" -c "print('ok')" >nul 2>&1
 if not errorlevel 1 goto :venv_ok
 
 :create_venv
-if exist "venv" (
+if exist "%VENV_DIR%" (
     echo Recreating virtual environment...
-    rmdir /s /q venv
+    rmdir /s /q "%VENV_DIR%"
 )
-if not exist "venv" (
-    echo Creating virtual environment...
-    %PYTHON% -m venv venv
-)
+echo Creating virtual environment...
+%PYTHON% -m venv "%VENV_DIR%"
 
 :venv_ok
 REM === Activate venv ===
-call venv\Scripts\activate.bat
+call "%VENV_DIR%\Scripts\activate.bat"
 
 REM === Install deps (re-install if requirements.txt changes) ===
-set "MARKER=venv\.deps_installed"
+set "MARKER=%VENV_DIR%\.deps_installed"
 if exist "%MARKER%" (
     fc /b requirements.txt "%MARKER%" >nul 2>&1 && goto :launch
 )
@@ -59,8 +60,8 @@ copy /y requirements.txt "%MARKER%" >nul 2>&1
 
 :launch
 REM Use pythonw (no console) if available
-if exist "venv\Scripts\pythonw.exe" (
-    start "" "venv\Scripts\pythonw.exe" musicotheque.py %*
+if exist "%VENV_DIR%\Scripts\pythonw.exe" (
+    start "" "%VENV_DIR%\Scripts\pythonw.exe" "%~dp0musicotheque.py" %*
 ) else (
     python musicotheque.py %*
 )

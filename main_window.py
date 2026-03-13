@@ -244,6 +244,12 @@ class TrackTableModel(QAbstractTableModel):
     def columnCount(self, parent=QModelIndex()):
         return len(self._columns)
 
+    def flags(self, index):
+        f = super().flags(index)
+        if index.isValid():
+            f |= Qt.ItemFlag.ItemIsDragEnabled
+        return f
+
     def data(self, index, role=Qt.ItemDataRole.DisplayRole):
         if not index.isValid():
             return None

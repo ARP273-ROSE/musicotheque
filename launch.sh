@@ -15,26 +15,29 @@ if [ -z "$PYTHON" ]; then
     exit 1
 fi
 
-# === Check if venv is valid for THIS machine ===
+# === Venv local to each PC (not in the synced NAS folder) ===
+VENV_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/MusicOtheque/venv"
+
+# === Check if venv exists and works ===
 VENV_OK=0
-if [ -x "venv/bin/python" ]; then
-    venv/bin/python -c "print('ok')" &>/dev/null && VENV_OK=1
+if [ -x "$VENV_DIR/bin/python" ]; then
+    "$VENV_DIR/bin/python" -c "print('ok')" &>/dev/null && VENV_OK=1
 fi
 
 if [ "$VENV_OK" = "0" ]; then
-    if [ -d "venv" ]; then
-        echo "Recreating virtual environment (was from another PC)..."
-        rm -rf venv
-    else
-        echo "Creating virtual environment..."
+    if [ -d "$VENV_DIR" ]; then
+        echo "Recreating virtual environment..."
+        rm -rf "$VENV_DIR"
     fi
-    $PYTHON -m venv venv || { echo "Failed to create venv"; exit 1; }
+    echo "Creating virtual environment..."
+    mkdir -p "$(dirname "$VENV_DIR")"
+    $PYTHON -m venv "$VENV_DIR" || { echo "Failed to create venv"; exit 1; }
 fi
 
-# === Activate and install ===
-source venv/bin/activate
+# === Activate and install deps ===
+source "$VENV_DIR/bin/activate"
 
-MARKER="venv/.deps_installed"
+MARKER="$VENV_DIR/.deps_installed"
 if [ ! -f "$MARKER" ] || ! diff -q requirements.txt "$MARKER" &>/dev/null; then
     echo "Installing dependencies..."
     pip install -q -r requirements.txt
