@@ -19,6 +19,9 @@ CLAUDE.md
 _crash_report.json
 _error.log
 musicotheque.db
+musicotheque.log
+backups/
+.shortcut_config.json
 .env
 *.ps1
 transfer.bat

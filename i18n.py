@@ -142,6 +142,8 @@ TX = {
     'about': {'en': 'About MusicOthèque', 'fr': 'À propos de MusicOthèque'},
     'check_updates': {'en': 'Check for Updates', 'fr': 'Vérifier les mises à jour'},
     'report_bug': {'en': 'Report a Bug', 'fr': 'Signaler un bug'},
+    'create_shortcut': {'en': 'Create Desktop Shortcut', 'fr': 'Créer raccourci bureau'},
+    'create_shortcut_tip': {'en': 'Create or update the desktop shortcut', 'fr': 'Créer ou mettre à jour le raccourci sur le bureau'},
 
     # Audio quality
     'quality_lossless': {'en': 'Lossless', 'fr': 'Sans perte'},

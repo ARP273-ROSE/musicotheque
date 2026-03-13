@@ -1184,6 +1184,12 @@ class MainWindow(QMainWindow):
         act_updates = help_menu.addAction(T('check_updates'))
         act_updates.triggered.connect(self._on_check_updates)
 
+        help_menu.addSeparator()
+
+        act_shortcut = help_menu.addAction(T('create_shortcut'))
+        act_shortcut.setToolTip(T('create_shortcut_tip'))
+        act_shortcut.triggered.connect(self._on_create_shortcut)
+
     def _connect_signals(self):
         """Wire up all signals."""
         # Player signals
@@ -2535,6 +2541,14 @@ class MainWindow(QMainWindow):
         """Open GitHub issues page."""
         import webbrowser
         webbrowser.open('https://github.com/ARP273-ROSE/musicotheque/issues/new')
+
+    def _on_create_shortcut(self):
+        """Create desktop shortcut."""
+        try:
+            from shortcut_helper import create_shortcut_force
+            create_shortcut_force("MusicOthèque", "musicotheque.py", "logo.ico")
+        except Exception as e:
+            logging.getLogger(__name__).error(f"Shortcut creation error: {e}")
 
     def _on_check_updates(self):
         """Manual update check (non-blocking)."""

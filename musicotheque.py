@@ -21,15 +21,8 @@ APP_DIR = Path(__file__).parent
 
 
 def _get_data_dir():
-    """Cross-platform data directory."""
-    system = platform.system()
-    if system == 'Windows':
-        base = Path(os.environ.get('APPDATA', str(Path.home())))
-    elif system == 'Darwin':
-        base = Path.home() / 'Library' / 'Application Support'
-    else:
-        base = Path(os.environ.get('XDG_DATA_HOME', str(Path.home() / '.local' / 'share')))
-    return base / 'MusicOtheque'
+    """Data directory = project directory (portable across PCs/NAS/Linux)."""
+    return APP_DIR
 
 
 DATA_DIR = _get_data_dir()
