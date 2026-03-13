@@ -1803,12 +1803,17 @@ class MainWindow(QMainWindow):
         if thread:
             if thread.isRunning():
                 thread.quit()
-                thread.wait(3000)
+                if not thread.wait(5000):
+                    log.warning("Thread %s did not stop in 5s, terminating", attr_thread)
+                    thread.terminate()
+                    thread.wait(1000)
             thread.deleteLater()
+            setattr(self, attr_thread, None)
         if attr_worker:
             worker = getattr(self, attr_worker, None)
             if worker:
                 worker.deleteLater()
+                setattr(self, attr_worker, None)
 
     def _start_scan(self, folders, full_rescan=False):
         """Launch scan worker in thread."""
