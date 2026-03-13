@@ -1,6 +1,7 @@
 """Online metadata fetcher using MusicBrainz API."""
 import logging
 import re
+import threading
 import time
 
 from pathlib import Path
@@ -14,6 +15,7 @@ log = logging.getLogger(__name__)
 # MusicBrainz rate limit: 1 request per second
 _RATE_LIMIT = 1.1
 _last_request = 0.0
+_rate_lock = threading.Lock()
 def _get_user_agent():
     try:
         from musicotheque import VERSION
@@ -29,11 +31,12 @@ def _mb_request(endpoint, params=None):
     import requests
 
     global _last_request
-    now = time.time()
-    wait = _RATE_LIMIT - (now - _last_request)
-    if wait > 0:
-        time.sleep(wait)
-    _last_request = time.time()
+    with _rate_lock:
+        now = time.time()
+        wait = _RATE_LIMIT - (now - _last_request)
+        if wait > 0:
+            time.sleep(wait)
+        _last_request = time.time()
 
     url = f"https://musicbrainz.org/ws/2/{endpoint}"
     headers = {'User-Agent': _USER_AGENT, 'Accept': 'application/json'}

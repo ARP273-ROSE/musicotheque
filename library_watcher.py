@@ -47,6 +47,7 @@ class LibraryWatcher(QObject):
         self._last_scan_time = 0
         self._running = False
         self._known_files = {}  # path -> mtime snapshot
+        self._files_lock = threading.Lock()
 
     def start(self):
         """Start watching."""
@@ -68,7 +69,8 @@ class LibraryWatcher(QObject):
             snapshot = {}
             for row in rows:
                 snapshot[row['file_path']] = row['file_mtime'] or 0
-            self._known_files = snapshot
+            with self._files_lock:
+                self._known_files = snapshot
             log.debug("Watcher snapshot: %d tracks", len(snapshot))
         except Exception as e:
             log.warning("Watcher snapshot failed: %s", e)
@@ -122,15 +124,19 @@ class LibraryWatcher(QObject):
                         except OSError:
                             continue
 
-                        if fpath not in self._known_files:
-                            added += 1
-                            changed_folders.add(folder_path)
-                        elif abs(self._known_files[fpath] - mtime) > 1:
-                            modified += 1
-                            changed_folders.add(folder_path)
+                        with self._files_lock:
+                            known = self._known_files
+                            if fpath not in known:
+                                added += 1
+                                changed_folders.add(folder_path)
+                            elif abs(known[fpath] - mtime) > 1:
+                                modified += 1
+                                changed_folders.add(folder_path)
 
             # Check for removed files
-            for known_path in list(self._known_files.keys()):
+            with self._files_lock:
+                known_paths = list(self._known_files.keys())
+            for known_path in known_paths:
                 # Only check files that should be in scanned folders
                 if known_path not in current_files and not os.path.exists(known_path):
                     removed += 1

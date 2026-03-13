@@ -10,6 +10,7 @@ Design references:
 - Spectrogram: Inferno colormap (perceptually uniform, scientific standard)
 """
 import logging
+import threading
 import numpy as np
 
 from PyQt6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QStackedWidget
@@ -69,6 +70,7 @@ class AudioAnalyzer:
     """Audio analysis engine — maintains ring buffer, computes FFT and RMS."""
 
     def __init__(self):
+        self._lock = threading.Lock()
         self._ring = np.zeros(RING_SIZE, dtype=np.float32)
         self._ring_l = np.zeros(RING_SIZE, dtype=np.float32)  # left channel
         self._ring_r = np.zeros(RING_SIZE, dtype=np.float32)  # right channel
@@ -101,7 +103,7 @@ class AudioAnalyzer:
         self._spec_row = 0
 
     def feed(self, audio_buffer: QAudioBuffer):
-        """Feed audio buffer into ring buffer."""
+        """Feed audio buffer into ring buffer (thread-safe)."""
         try:
             raw = audio_buffer.constData()
             byte_count = audio_buffer.byteCount()
@@ -116,43 +118,47 @@ class AudioAnalyzer:
                 left = stereo[:, 0]
                 right = stereo[:, 1]
                 mono = stereo.mean(axis=1)
-                # Write stereo ring buffers
-                sn = len(left)
-                if sn >= RING_SIZE:
-                    self._ring_l[:] = left[-RING_SIZE:]
-                    self._ring_r[:] = right[-RING_SIZE:]
-                    self._stereo_write_pos = 0
-                else:
-                    end = self._stereo_write_pos + sn
-                    if end <= RING_SIZE:
-                        self._ring_l[self._stereo_write_pos:end] = left
-                        self._ring_r[self._stereo_write_pos:end] = right
-                    else:
-                        first = RING_SIZE - self._stereo_write_pos
-                        self._ring_l[self._stereo_write_pos:] = left[:first]
-                        self._ring_l[:sn - first] = left[first:]
-                        self._ring_r[self._stereo_write_pos:] = right[:first]
-                        self._ring_r[:sn - first] = right[first:]
-                    self._stereo_write_pos = end % RING_SIZE
             else:
                 mono = samples
+                left = right = None
 
-            # Write mono ring buffer (for FFT/spectrum)
-            n = len(mono)
-            if n >= RING_SIZE:
-                self._ring[:] = mono[-RING_SIZE:]
-                self._write_pos = 0
-            else:
-                end = self._write_pos + n
-                if end <= RING_SIZE:
-                    self._ring[self._write_pos:end] = mono
+            with self._lock:
+                # Write stereo ring buffers
+                if left is not None:
+                    sn = len(left)
+                    if sn >= RING_SIZE:
+                        self._ring_l[:] = left[-RING_SIZE:]
+                        self._ring_r[:] = right[-RING_SIZE:]
+                        self._stereo_write_pos = 0
+                    else:
+                        end = self._stereo_write_pos + sn
+                        if end <= RING_SIZE:
+                            self._ring_l[self._stereo_write_pos:end] = left
+                            self._ring_r[self._stereo_write_pos:end] = right
+                        else:
+                            first = RING_SIZE - self._stereo_write_pos
+                            self._ring_l[self._stereo_write_pos:] = left[:first]
+                            self._ring_l[:sn - first] = left[first:]
+                            self._ring_r[self._stereo_write_pos:] = right[:first]
+                            self._ring_r[:sn - first] = right[first:]
+                        self._stereo_write_pos = end % RING_SIZE
+
+                # Write mono ring buffer (for FFT/spectrum)
+                n = len(mono)
+                if n >= RING_SIZE:
+                    self._ring[:] = mono[-RING_SIZE:]
+                    self._write_pos = 0
                 else:
-                    first = RING_SIZE - self._write_pos
-                    self._ring[self._write_pos:] = mono[:first]
-                    self._ring[:n - first] = mono[first:]
-                self._write_pos = end % RING_SIZE
+                    end = self._write_pos + n
+                    if end <= RING_SIZE:
+                        self._ring[self._write_pos:end] = mono
+                    else:
+                        first = RING_SIZE - self._write_pos
+                        self._ring[self._write_pos:] = mono[:first]
+                        self._ring[:n - first] = mono[first:]
+                    self._write_pos = end % RING_SIZE
 
-            self._has_data = True
+                self._has_data = True
         except Exception as e:
             log.debug("AudioAnalyzer feed error: %s", e)
 
@@ -161,15 +167,16 @@ class AudioAnalyzer:
         if not self._has_data:
             return np.full(NUM_BARS, -80.0)
 
-        # Extract last FFT_SIZE samples from ring buffer
-        end = self._write_pos
-        if end >= FFT_SIZE:
-            chunk = self._ring[end - FFT_SIZE:end]
-        else:
-            chunk = np.concatenate([
-                self._ring[-(FFT_SIZE - end):],
-                self._ring[:end]
-            ])
+        # Extract last FFT_SIZE samples from ring buffer (thread-safe snapshot)
+        with self._lock:
+            end = self._write_pos
+            if end >= FFT_SIZE:
+                chunk = self._ring[end - FFT_SIZE:end].copy()
+            else:
+                chunk = np.concatenate([
+                    self._ring[-(FFT_SIZE - end):],
+                    self._ring[:end]
+                ])
 
         # Windowed FFT
         windowed = chunk * self._window
@@ -206,15 +213,22 @@ class AudioAnalyzer:
                 return -80.0
             return max(-80.0, 20 * np.log10(rms))
 
-        end = self._stereo_write_pos
-        return _rms_db(self._ring_l, end), _rms_db(self._ring_r, end)
+        with self._lock:
+            end = self._stereo_write_pos
+            left_copy = self._ring_l.copy()
+            right_copy = self._ring_r.copy()
+        return _rms_db(left_copy, end), _rms_db(right_copy, end)
 
     def get_peak(self):
         """Get stereo peak level in dB (left, right)."""
         if not self._has_data:
             return -80.0, -80.0
         n = min(1000, RING_SIZE)
-        end = self._stereo_write_pos
+
+        with self._lock:
+            end = self._stereo_write_pos
+            left_copy = self._ring_l.copy()
+            right_copy = self._ring_r.copy()
 
         def _peak_db(ring):
             if end >= n:
@@ -226,7 +240,7 @@ class AudioAnalyzer:
                 return -80.0
             return max(-80.0, 20 * np.log10(peak))
 
-        return _peak_db(self._ring_l), _peak_db(self._ring_r)
+        return _peak_db(left_copy), _peak_db(right_copy)
 
     def push_spectrogram_row(self, spectrum):
         """Add a spectrum row to spectrogram history."""
