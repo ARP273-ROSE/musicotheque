@@ -12,7 +12,10 @@ import traceback
 import time
 from pathlib import Path
 
-VERSION = '2.3.1'
+# Force FFmpeg backend for QMediaPlayer (required for HLS streams like BBC Radio 3)
+os.environ.setdefault('QT_MEDIA_BACKEND', 'ffmpeg')
+
+VERSION = '3.0.0'
 APP_NAME = 'MusicOthèque'
 APP_DIR = Path(__file__).parent
 
@@ -230,6 +233,12 @@ def main():
     app.setApplicationName(APP_NAME)
     app.setApplicationVersion(VERSION)
     app.setOrganizationName('MusicOtheque')
+
+    # Application icon
+    from PyQt6.QtGui import QIcon
+    icon_path = APP_DIR / 'icon.ico'
+    if icon_path.exists():
+        app.setWindowIcon(QIcon(str(icon_path)))
 
     # Dark palette
     from PyQt6.QtGui import QPalette, QColor

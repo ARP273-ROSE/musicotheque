@@ -32,6 +32,7 @@ TX = {
     'view_albums': {'en': 'Albums', 'fr': 'Albums'},
     'view_tracks': {'en': 'Tracks', 'fr': 'Pistes'},
     'view_genres': {'en': 'Genres', 'fr': 'Genres'},
+    'view_periods': {'en': 'Periods', 'fr': 'Époques'},
     'view_playlists': {'en': 'Playlists', 'fr': 'Playlists'},
     'view_now_playing': {'en': 'Now Playing', 'fr': 'En cours de lecture'},
     'view_all_tracks': {'en': 'All Tracks', 'fr': 'Toutes les pistes'},
@@ -173,6 +174,8 @@ TX = {
     'sidebar_artists_tip': {'en': 'Browse by artist name', 'fr': 'Parcourir par nom d\'artiste'},
     'sidebar_albums_tip': {'en': 'Browse by album', 'fr': 'Parcourir par album'},
     'sidebar_genres_tip': {'en': 'Browse by musical genre', 'fr': 'Parcourir par genre musical'},
+    'sidebar_periods_tip': {'en': 'Browse by musical period (Baroque, Classical, Romantic...)',
+                            'fr': 'Parcourir par époque musicale (Baroque, Classique, Romantique...)'},
     'sidebar_playlists_tip': {'en': 'Manage your playlists', 'fr': 'Gérer vos playlists'},
 
     # Player bar tooltips
@@ -336,6 +339,7 @@ TX = {
     'web_radio': {'en': 'Web Radio', 'fr': 'Web Radio'},
     'web_radio_tip': {'en': 'Listen to internet radio stations worldwide', 'fr': 'Écouter des stations de radio en ligne du monde entier'},
     'radio_cat_classical': {'en': 'Classical', 'fr': 'Classique'},
+    'radio_cat_folk': {'en': 'Folk / Traditional', 'fr': 'Folk / Traditionnel'},
     'radio_cat_culture': {'en': 'Culture', 'fr': 'Culture'},
     'radio_cat_news': {'en': 'News', 'fr': 'Info'},
     'radio_cat_eclectic': {'en': 'Eclectic', 'fr': 'Éclectique'},
@@ -375,6 +379,24 @@ TX = {
     'track_details': {'en': 'Track Details', 'fr': 'Détails de la piste'},
     'classification': {'en': 'Classification', 'fr': 'Classification'},
 
+    # Audio output / HiFi chain
+    'audio_output': {'en': 'Audio Output', 'fr': 'Sortie Audio'},
+    'audio_output_tip': {'en': 'Select audio output device (DAC, speakers, headphones)',
+                         'fr': 'Sélectionner le périphérique de sortie audio (DAC, enceintes, casque)'},
+    'audio_device': {'en': 'Output device:', 'fr': 'Périphérique de sortie :'},
+    'audio_device_default': {'en': 'System Default', 'fr': 'Par défaut du système'},
+    'audio_device_tip': {'en': 'Audio output device currently in use',
+                         'fr': 'Périphérique de sortie audio actuellement utilisé'},
+    'audio_device_caps': {'en': 'Capabilities: {rates} · {channels}ch · {formats}',
+                          'fr': 'Capacités : {rates} · {channels} canaux · {formats}'},
+    'audio_chain_info': {'en': 'Audio chain: source → output device',
+                         'fr': 'Chaîne audio : source → périphérique de sortie'},
+    'audio_format_display': {'en': '{fmt} · {rate} · {depth}',
+                             'fr': '{fmt} · {rate} · {depth}'},
+    'audio_exclusive': {'en': 'Exclusive mode (WASAPI)', 'fr': 'Mode exclusif (WASAPI)'},
+    'audio_exclusive_tip': {'en': 'Bypass Windows mixer for bit-perfect output (restart required)',
+                            'fr': 'Contourner le mixeur Windows pour une sortie bit-perfect (redémarrage requis)'},
+
     # Audio visualizer
     'visualizer': {'en': 'Audio Visualizer', 'fr': 'Visualiseur audio'},
     'visualizer_tip': {'en': 'Show spectrum analyzer, VU meter, and spectrogram (Ctrl+V)', 'fr': 'Afficher analyseur spectral, VU-mètre et spectrogramme (Ctrl+V)'},
@@ -396,6 +418,49 @@ TX = {
     # Enrichment
     'enrich_metadata': {'en': 'Enrich Metadata Online...', 'fr': 'Enrichir les métadonnées en ligne...'},
     'enrich_metadata_tip': {'en': 'Fetch missing metadata and cover art from MusicBrainz', 'fr': 'Récupérer les métadonnées et pochettes manquantes depuis MusicBrainz'},
+
+    # Musical movements / styles
+    'movement': {'en': 'Movement', 'fr': 'Courant'},
+    'sub_period': {'en': 'Sub-period', 'fr': 'Sous-période'},
+    'movement_impressionism': {'en': 'Impressionism', 'fr': 'Impressionnisme'},
+    'movement_expressionism': {'en': 'Expressionism', 'fr': 'Expressionnisme'},
+    'movement_neoclassicism': {'en': 'Neoclassicism', 'fr': 'Néoclassicisme'},
+    'movement_serialism': {'en': 'Serialism', 'fr': 'Sérialisme'},
+    'movement_minimalism': {'en': 'Minimalism', 'fr': 'Minimalisme'},
+    'movement_nationalism': {'en': 'Nationalism', 'fr': 'Nationalisme'},
+    'movement_late_romanticism': {'en': 'Late Romanticism', 'fr': 'Romantisme tardif'},
+    'movement_avant_garde': {'en': 'Avant-Garde', 'fr': 'Avant-Garde'},
+    'movement_film_music': {'en': 'Film Music', 'fr': 'Musique de film'},
+    'movement_holy_minimalism': {'en': 'Holy Minimalism', 'fr': 'Minimalisme sacré'},
+    'movement_neo_romanticism': {'en': 'Neo-Romanticism', 'fr': 'Néo-romantisme'},
+    'movement_spectralism': {'en': 'Spectralism', 'fr': 'Spectralisme'},
+    'movement_verismo': {'en': 'Verismo', 'fr': 'Vérisme'},
+    'movement_bel_canto': {'en': 'Bel Canto', 'fr': 'Bel Canto'},
+    'movement_venetian_school': {'en': 'Venetian School', 'fr': 'École vénitienne'},
+    'movement_roman_school': {'en': 'Roman School', 'fr': 'École romaine'},
+    'movement_franco_flemish': {'en': 'Franco-Flemish School', 'fr': 'École franco-flamande'},
+    'movement_ars_nova': {'en': 'Ars Nova', 'fr': 'Ars Nova'},
+    'movement_ars_antiqua': {'en': 'Ars Antiqua', 'fr': 'Ars Antiqua'},
+
+    # Sub-periods
+    'sub_early_baroque': {'en': 'Early Baroque (1600–1650)', 'fr': 'Premier Baroque (1600–1650)'},
+    'sub_high_baroque': {'en': 'High Baroque (1650–1700)', 'fr': 'Haut Baroque (1650–1700)'},
+    'sub_late_baroque': {'en': 'Late Baroque (1700–1750)', 'fr': 'Baroque tardif (1700–1750)'},
+    'sub_galant': {'en': 'Galant Style (1720–1770)', 'fr': 'Style galant (1720–1770)'},
+    'sub_early_romantic': {'en': 'Early Romantic (1820–1850)', 'fr': 'Début romantique (1820–1850)'},
+    'sub_high_romantic': {'en': 'High Romantic (1850–1890)', 'fr': 'Haut romantisme (1850–1890)'},
+    'sub_late_romantic': {'en': 'Late Romantic (1890–1910)', 'fr': 'Romantisme tardif (1890–1910)'},
+    'sub_fin_de_siecle': {'en': 'Fin de Siècle (1890–1914)', 'fr': 'Fin de siècle (1890–1914)'},
+    'sub_interwar': {'en': 'Interwar Modernism (1918–1945)', 'fr': 'Modernisme entre-deux-guerres (1918–1945)'},
+
+    # Periods sidebar (enhanced)
+    'view_movements': {'en': 'Movements', 'fr': 'Courants'},
+    'sidebar_movements_tip': {'en': 'Browse by musical movement (Impressionism, Minimalism...)',
+                               'fr': 'Parcourir par courant musical (Impressionnisme, Minimalisme...)'},
+
+    # Classification enhanced
+    'classify_done_detail': {'en': 'Classification complete: {count} tracks classified, {movements} movements detected',
+                             'fr': 'Classification terminée : {count} pistes classifiées, {movements} courants détectés'},
 }
 
 

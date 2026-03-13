@@ -4,7 +4,8 @@ from enum import Enum, auto
 from pathlib import Path
 
 from PyQt6.QtCore import QObject, pyqtSignal, QUrl, Qt, QTimer
-from PyQt6.QtMultimedia import QMediaPlayer, QAudioOutput, QAudioBufferOutput, QAudioFormat
+from PyQt6.QtMultimedia import (QMediaPlayer, QAudioOutput, QAudioBufferOutput,
+                                 QAudioFormat, QMediaDevices, QAudioDevice)
 
 log = logging.getLogger(__name__)
 
@@ -45,6 +46,7 @@ class AudioPlayer(QObject):
     shuffle_changed = pyqtSignal(object)      # ShuffleMode
     radio_changed = pyqtSignal(dict)          # station info or {} when stopped
     audio_buffer_ready = pyqtSignal(object)   # QAudioBuffer for visualization
+    audio_info_changed = pyqtSignal(dict)     # Live audio chain info
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -341,6 +343,107 @@ class AudioPlayer(QObject):
         self._original_queue.extend(tracks)
         self.queue_changed.emit()
 
+    # --- Audio Device Management ---
+
+    def get_audio_devices(self):
+        """Return list of available audio output devices."""
+        try:
+            return QMediaDevices.audioOutputs()
+        except Exception as e:
+            log.warning("Cannot list audio devices: %s", e)
+            return []
+
+    def get_current_device(self):
+        """Return the current audio output device."""
+        return self._audio_output.device()
+
+    def set_audio_device(self, device):
+        """Switch the audio output device.
+
+        Args:
+            device: QAudioDevice to use, or None for system default.
+        """
+        if device is None:
+            device = QMediaDevices.defaultAudioOutput()
+        try:
+            self._audio_output.setDevice(device)
+            log.info("Audio output device: %s", device.description())
+        except Exception as e:
+            log.warning("Failed to set audio device: %s", e)
+
+    def set_audio_device_by_name(self, name):
+        """Set audio device by its description string.
+
+        Args:
+            name: Device description string. Empty or None for default.
+        """
+        if not name:
+            self.set_audio_device(None)
+            return
+        for dev in self.get_audio_devices():
+            if dev.description() == name:
+                self.set_audio_device(dev)
+                return
+        log.info("Audio device '%s' not found, using default", name)
+
+    def get_device_info(self, device=None):
+        """Return detailed info dict for an audio device.
+
+        Args:
+            device: QAudioDevice, or None for current device.
+        """
+        if device is None:
+            device = self._audio_output.device()
+        if device is None:
+            return {}
+
+        info = {
+            'name': device.description(),
+            'is_default': device.isDefault(),
+            'min_sample_rate': 0,
+            'max_sample_rate': 0,
+            'min_channels': 0,
+            'max_channels': 0,
+            'sample_formats': [],
+        }
+
+        try:
+            info['min_sample_rate'] = device.minimumSampleRate()
+            info['max_sample_rate'] = device.maximumSampleRate()
+            info['min_channels'] = device.minimumChannelCount()
+            info['max_channels'] = device.maximumChannelCount()
+            fmts = device.supportedSampleFormats()
+            fmt_names = {
+                QAudioFormat.SampleFormat.UInt8: '8-bit',
+                QAudioFormat.SampleFormat.Int16: '16-bit',
+                QAudioFormat.SampleFormat.Int32: '32-bit',
+                QAudioFormat.SampleFormat.Float: 'Float32',
+            }
+            info['sample_formats'] = [fmt_names.get(f, str(f)) for f in fmts]
+        except Exception as e:
+            log.debug("Device info partial: %s", e)
+
+        return info
+
+    def _emit_audio_info(self, track):
+        """Emit audio chain information for the current track."""
+        device = self._audio_output.device()
+        dev_info = self.get_device_info(device)
+
+        info = {
+            'format': track.get('file_format', ''),
+            'sample_rate': track.get('sample_rate', 0) or 0,
+            'bit_depth': track.get('bit_depth', 0) or 0,
+            'bitrate': track.get('bitrate', 0) or 0,
+            'channels': track.get('channels', 2) or 2,
+            'device_name': dev_info.get('name', ''),
+            'device_is_default': dev_info.get('is_default', True),
+            'device_max_rate': dev_info.get('max_sample_rate', 0),
+            'device_max_channels': dev_info.get('max_channels', 0),
+            'device_formats': dev_info.get('sample_formats', []),
+        }
+        self.audio_info_changed.emit(info)
+
     def remove_from_queue(self, index):
         """Remove track at index from queue."""
         if 0 <= index < len(self._queue):
@@ -378,6 +481,7 @@ class AudioPlayer(QObject):
         self._player.setSource(url)
         self._player.play()
         self.track_changed.emit(track)
+        self._emit_audio_info(track)
         log.info("Playing: %s", file_path)
 
     def _prepare_next(self):

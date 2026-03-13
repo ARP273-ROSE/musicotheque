@@ -18,6 +18,7 @@ CLAUDE.md
 *.synctex.gz
 _crash_report.json
 _error.log
+musicotheque.db
 .env
 *.ps1
 transfer.bat

@@ -6,6 +6,7 @@ with thread-safe QObject workers and security hardening.
 import logging
 import os
 import re
+import threading
 import time
 import unicodedata
 from datetime import datetime, timezone
@@ -26,6 +27,7 @@ log = logging.getLogger(__name__)
 # Rate limiting: 1 request per second for external APIs
 _RATE_LIMIT_SEC = 1.0
 _last_request_time = 0.0
+_rate_lock = threading.Lock()
 
 # iTunes Search API base URL
 _ITUNES_SEARCH_URL = "https://itunes.apple.com/search"
@@ -125,13 +127,14 @@ def _sanitize_filename(name: str, extension: str = "") -> str:
 
 
 def _rate_limit():
-    """Enforce rate limiting: wait if needed to respect 1 req/sec."""
+    """Enforce rate limiting: wait if needed to respect 1 req/sec (thread-safe)."""
     global _last_request_time
-    now = time.monotonic()
-    elapsed = now - _last_request_time
-    if elapsed < _RATE_LIMIT_SEC:
-        time.sleep(_RATE_LIMIT_SEC - elapsed)
-    _last_request_time = time.monotonic()
+    with _rate_lock:
+        now = time.monotonic()
+        elapsed = now - _last_request_time
+        if elapsed < _RATE_LIMIT_SEC:
+            time.sleep(_RATE_LIMIT_SEC - elapsed)
+        _last_request_time = time.monotonic()
 
 
 def _get_session():

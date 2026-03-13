@@ -83,6 +83,25 @@ def format_duration(ms):
     return f'{m}:{s:02d}'
 
 
+def format_duration_long(ms):
+    """Format milliseconds to human-readable d/h/m for large totals."""
+    if not ms or ms <= 0:
+        return '0 min'
+    total_s = ms // 1000
+    total_m = total_s // 60
+    total_h = total_m // 60
+    m = total_m % 60
+    d = total_h // 24
+    h = total_h % 24
+    lang = get_lang()
+    if d > 0:
+        day_label = 'j' if lang == 'fr' else 'd'
+        return f"{d}{day_label} {h}h {m:02d}min"
+    if total_h > 0:
+        return f"{total_h}h {m:02d}min"
+    return f"{total_m} min"
+
+
 def format_size(size_bytes):
     """Format bytes to human-readable size."""
     if not size_bytes:
@@ -136,6 +155,12 @@ class MainWindow(QMainWindow):
         super().__init__()
         self._settings = QSettings('MusicOtheque', 'MusicOtheque')
         self._player = AudioPlayer(self)
+
+        # Restore saved audio device
+        saved_device = db.fetchone("SELECT value FROM config WHERE key = 'audio_device'")
+        if saved_device and saved_device['value']:
+            self._player.set_audio_device_by_name(saved_device['value'])
+
         # Worker threads and workers (all initialized to None)
         self._scan_thread = None
         self._scan_worker = None
@@ -308,6 +333,11 @@ class MainWindow(QMainWindow):
         self._item_genres = QTreeWidgetItem(lib_root, [T('view_genres')])
         self._item_genres.setData(0, Qt.ItemDataRole.UserRole, 'genres')
         self._item_genres.setToolTip(0, T('sidebar_genres_tip'))
+
+        # Periods section (musical eras)
+        self._item_periods = QTreeWidgetItem(lib_root, [T('view_periods')])
+        self._item_periods.setData(0, Qt.ItemDataRole.UserRole, 'periods')
+        self._item_periods.setToolTip(0, T('sidebar_periods_tip'))
 
         # Playlists section
         self._pl_root = QTreeWidgetItem(self._sidebar, [T('view_playlists')])
@@ -490,16 +520,41 @@ class MainWindow(QMainWindow):
         self._volume_slider.setToolTip(T('volume'))
         vol_layout.addWidget(self._volume_slider)
 
-        # Quality badge
+        layout.addLayout(vol_layout)
+
+        # Audio info section (right side)
+        audio_info_layout = QVBoxLayout()
+        audio_info_layout.setSpacing(1)
+        audio_info_layout.setContentsMargins(4, 0, 0, 0)
+
+        # Quality badge (Hi-Res / CD / Lossless / Lossy / LIVE)
         self._quality_label = QLabel('')
         self._quality_label.setStyleSheet(
             "font-size: 9px; padding: 2px 6px; border-radius: 3px; "
             "background: #2a5a2a; color: #8f8;"
         )
         self._quality_label.hide()
-        vol_layout.addWidget(self._quality_label)
+        audio_info_layout.addWidget(self._quality_label)
 
-        layout.addLayout(vol_layout)
+        # Format info: "FLAC · 96kHz/24-bit"
+        self._format_info_label = QLabel('')
+        self._format_info_label.setStyleSheet(
+            "font-size: 9px; color: #999; padding: 0 2px;"
+        )
+        self._format_info_label.setToolTip(T('audio_chain_info'))
+        self._format_info_label.hide()
+        audio_info_layout.addWidget(self._format_info_label)
+
+        # Device indicator: "→ USB DAC Name"
+        self._device_label = QLabel('')
+        self._device_label.setStyleSheet(
+            "font-size: 8px; color: #666; padding: 0 2px;"
+        )
+        self._device_label.setToolTip(T('audio_device_tip'))
+        self._device_label.hide()
+        audio_info_layout.addWidget(self._device_label)
+
+        layout.addLayout(audio_info_layout)
 
         return bar
 
@@ -708,6 +763,7 @@ class MainWindow(QMainWindow):
         self._player.repeat_changed.connect(self._on_repeat_changed)
         self._player.shuffle_changed.connect(self._on_shuffle_changed)
         self._player.radio_changed.connect(self._on_radio_changed)
+        self._player.audio_info_changed.connect(self._on_audio_info)
         self._player.error_occurred.connect(
             lambda msg: self._status_bar.showMessage(f"Error: {msg}", 5000)
         )
@@ -779,6 +835,9 @@ class MainWindow(QMainWindow):
         elif view == 'genres':
             self._load_genres_view()
             return
+        elif view == 'periods':
+            self._load_periods_view()
+            return
         elif view == 'artist' and filter_value:
             tracks = db.fetchall("""
                 SELECT t.*, a.name as artist_name, al.title as album_title
@@ -805,6 +864,15 @@ class MainWindow(QMainWindow):
                 LEFT JOIN albums al ON t.album_id = al.id
                 WHERE t.genre = ?
                 ORDER BY a.name, al.year, t.disc_number, t.track_number
+            """, (filter_value,))
+        elif view == 'period' and filter_value:
+            tracks = db.fetchall("""
+                SELECT t.*, a.name as artist_name, al.title as album_title
+                FROM tracks t
+                LEFT JOIN artists a ON t.artist_id = a.id
+                LEFT JOIN albums al ON t.album_id = al.id
+                WHERE t.period = ?
+                ORDER BY t.composer, t.year, al.title, t.disc_number, t.track_number
             """, (filter_value,))
         elif view.startswith('playlist:'):
             pl_id = int(view.split(':')[1])
@@ -882,6 +950,32 @@ class MainWindow(QMainWindow):
         self._item_genres.setExpanded(True)
         self._populate_table([])
 
+    def _load_periods_view(self):
+        """Show musical period list (Baroque, Classical, Romantic, etc.)."""
+        self._item_periods.takeChildren()
+        periods = db.fetchall("""
+            SELECT period, COUNT(*) as cnt FROM tracks
+            WHERE period IS NOT NULL AND period != ''
+            GROUP BY period ORDER BY
+                CASE period
+                    WHEN 'Medieval' THEN 1
+                    WHEN 'Renaissance' THEN 2
+                    WHEN 'Baroque' THEN 3
+                    WHEN 'Classical' THEN 4
+                    WHEN 'Romantic' THEN 5
+                    WHEN 'Modern' THEN 6
+                    WHEN 'Contemporary' THEN 7
+                    WHEN 'Recent' THEN 8
+                    ELSE 9
+                END
+        """)
+        for p in periods:
+            item = QTreeWidgetItem(self._item_periods,
+                                   [f"{p['period']} ({p['cnt']})"])
+            item.setData(0, Qt.ItemDataRole.UserRole, f"period:{p['period']}")
+        self._item_periods.setExpanded(True)
+        self._populate_table([])
+
     def _load_episodes_view(self, podcast_id=None):
         """Load podcast episodes into the table."""
         self._content_mode = 'podcasts'
@@ -953,7 +1047,7 @@ class MainWindow(QMainWindow):
         count = len(items)
         parts = [T('total_tracks', count=count)]
         if total_duration > 0:
-            parts.append(T('total_duration', duration=format_duration(total_duration)))
+            parts.append(T('total_duration', duration=format_duration_long(total_duration)))
         if total_size > 0:
             parts.append(T('total_size', size=format_size(total_size)))
         self._status_bar.showMessage(' | '.join(parts))
@@ -1203,17 +1297,69 @@ class MainWindow(QMainWindow):
                 "background: #222; border-radius: 4px; color: #5577aa; font-size: 28px;"
             )
 
-            # Hide seek bar (live stream)
+            # Hide seek bar and format info (live stream)
             self._seek_slider.setEnabled(False)
             self._seek_slider.setValue(0)
             self._position_label.setText(T('radio_live'))
             self._duration_label.setText('')
+            self._format_info_label.hide()
         else:
             # Returning from radio to normal mode
             self._seek_slider.setEnabled(True)
             self._quality_label.hide()
+            self._format_info_label.hide()
             self._position_label.setText('0:00')
             self._duration_label.setText('0:00')
+
+    def _on_audio_info(self, info):
+        """Update audio chain display in player bar."""
+        fmt = info.get('format', '')
+        sr = info.get('sample_rate', 0)
+        bd = info.get('bit_depth', 0)
+        br = info.get('bitrate', 0)
+        dev_name = info.get('device_name', '')
+
+        # Build format string: "FLAC · 96kHz/24-bit" or "MP3 · 320kbps"
+        parts = []
+        if fmt:
+            parts.append(fmt)
+        if sr:
+            rate_str = f"{sr / 1000:.1f}kHz" if sr >= 1000 else f"{sr}Hz"
+            # Clean up "44.1kHz" not "44.1kHz"
+            rate_str = rate_str.replace('.0kHz', 'kHz')
+            if bd:
+                parts.append(f"{rate_str}/{bd}-bit")
+            else:
+                parts.append(rate_str)
+        elif bd:
+            parts.append(f"{bd}-bit")
+        if br and fmt in ('MP3', 'AAC', 'OGG', 'OPUS', 'WMA', 'M4A'):
+            parts.append(f"{br}kbps")
+
+        channels = info.get('channels', 2)
+        if channels and channels != 2:
+            ch_map = {1: 'Mono', 6: '5.1', 8: '7.1'}
+            ch_str = ch_map.get(channels, f"{channels}ch")
+            parts.append(ch_str)
+
+        if parts:
+            self._format_info_label.setText(' · '.join(parts))
+            self._format_info_label.show()
+        else:
+            self._format_info_label.hide()
+
+        # Device indicator
+        if dev_name:
+            prefix = '→ '
+            # Truncate long device names
+            display_name = dev_name if len(dev_name) <= 30 else dev_name[:27] + '...'
+            self._device_label.setText(f"{prefix}{display_name}")
+            self._device_label.setToolTip(
+                T('audio_device_tip') + f"\n{dev_name}"
+            )
+            self._device_label.show()
+        else:
+            self._device_label.hide()
 
     def _on_volume_changed(self, vol):
         """Update volume slider and mute button."""
@@ -1271,12 +1417,26 @@ class MainWindow(QMainWindow):
             return
         self._start_scan(folders, full_rescan=True)
 
+    def _cleanup_thread(self, attr_thread, attr_worker=None):
+        """Safely clean up a previous QThread and its worker."""
+        thread = getattr(self, attr_thread, None)
+        if thread:
+            if thread.isRunning():
+                thread.quit()
+                thread.wait(3000)
+            thread.deleteLater()
+        if attr_worker:
+            worker = getattr(self, attr_worker, None)
+            if worker:
+                worker.deleteLater()
+
     def _start_scan(self, folders, full_rescan=False):
         """Launch scan worker in thread."""
         if self._scan_thread and self._scan_thread.isRunning():
             self._status_bar.showMessage(T('scanning'), 2000)
             return
 
+        self._cleanup_thread('_scan_thread', '_scan_worker')
         self._scan_worker = ScanWorker(folders, full_rescan)
         self._scan_thread = QThread()
         self._scan_worker.moveToThread(self._scan_thread)
@@ -1322,6 +1482,7 @@ class MainWindow(QMainWindow):
         if not xml_path:
             return
 
+        self._cleanup_thread('_import_thread', '_import_worker')
         worker = ITunesImportWorker(xml_path)
         self._import_thread = QThread()
         worker.moveToThread(self._import_thread)
@@ -1356,6 +1517,7 @@ class MainWindow(QMainWindow):
             if track and isinstance(track, dict) and 'id' in track:
                 track_ids.add(track['id'])
 
+        self._cleanup_thread('_fetch_thread', '_fetch_worker')
         worker = MetadataFetchWorker(
             list(track_ids) if track_ids else None
         )
@@ -1385,7 +1547,7 @@ class MainWindow(QMainWindow):
 
     def _on_settings(self):
         """Open settings dialog."""
-        dlg = SettingsDialog(self)
+        dlg = SettingsDialog(player=self._player, parent=self)
         if dlg.exec() == QDialog.DialogCode.Accepted:
             self._refresh_library()
 
@@ -2144,13 +2306,16 @@ class MainWindow(QMainWindow):
         self._organize_thread.start()
 
     def _on_classify_library(self):
-        """Classify all tracks by musical period, form, and instrumentation."""
+        """Classify all tracks by musical period, form, and instrumentation.
+
+        Stores results in database columns (period, form, catalogue, instruments, music_key).
+        """
         from music_classifier import classify_track as _classify
         import html as html_mod
         esc = html_mod.escape
 
         tracks = db.fetchall(
-            "SELECT t.title, t.composer, t.genre, t.year, "
+            "SELECT t.id, t.title, t.composer, t.genre, t.year, "
             "a.title as album_title, ar.name as artist_name "
             "FROM tracks t "
             "LEFT JOIN albums a ON t.album_id = a.id "
@@ -2161,12 +2326,12 @@ class MainWindow(QMainWindow):
             self._status_bar.showMessage(T('no_results'), 3000)
             return
 
-        # Classify all tracks
+        # Classify all tracks and store in DB
         period_counts = {}
         form_counts = {}
         classified = 0
 
-        for t in tracks:
+        for i, t in enumerate(tracks):
             cl = _classify(
                 title=str(t.get('title', '') or ''),
                 composer=str(t.get('composer', '') or ''),
@@ -2174,25 +2339,48 @@ class MainWindow(QMainWindow):
                 album=str(t.get('album_title', '') or ''),
                 year=t.get('year'),
             )
-            if cl['period'] or cl['form']:
+
+            has_data = (cl['period'] or cl['form'] or cl['catalogue']
+                        or cl['instruments'] or cl['key'])
+            if has_data:
                 classified += 1
+                instruments_str = (', '.join(cl['instruments'])
+                                   if cl['instruments'] else None)
+                db.execute("""
+                    UPDATE tracks SET
+                        period=?, form=?, catalogue=?, instruments=?, music_key=?
+                    WHERE id=?
+                """, (cl['period'], cl['form'], cl['catalogue'],
+                      instruments_str, cl['key'], t['id']), commit=False)
+
             if cl['period']:
                 period_counts[cl['period']] = period_counts.get(cl['period'], 0) + 1
             if cl['form']:
                 form_counts[cl['form']] = form_counts.get(cl['form'], 0) + 1
 
+            if (i + 1) % 2000 == 0:
+                db.commit()
+
+        db.commit()
+
+        # Refresh sidebar to show periods
+        self._build_sidebar()
+
         # Build results dialog
         html = [f"<h3>{T('classify_library')}</h3>"]
         html.append(f"<p>{T('classify_done', count=classified)} / {len(tracks)}</p>")
 
+        period_order = ['Medieval', 'Renaissance', 'Baroque', 'Classical',
+                        'Romantic', 'Modern', 'Contemporary', 'Recent']
         if period_counts:
             html.append(f"<h4>{T('period')}</h4><table>")
-            for period, count in sorted(period_counts.items(),
-                                         key=lambda x: x[1], reverse=True):
-                pct = count * 100 // len(tracks)
-                html.append(f"<tr><td><b>{esc(period)}</b></td>"
-                           f"<td align='right'>{count}</td>"
-                           f"<td align='right'>{pct}%</td></tr>")
+            for period in period_order:
+                count = period_counts.get(period, 0)
+                if count:
+                    pct = count * 100 // len(tracks)
+                    html.append(f"<tr><td><b>{esc(period)}</b></td>"
+                               f"<td align='right'>{count}</td>"
+                               f"<td align='right'>{pct}%</td></tr>")
             html.append("</table>")
 
         if form_counts:
@@ -2323,16 +2511,66 @@ class MainWindow(QMainWindow):
 
 
 class SettingsDialog(QDialog):
-    """Settings dialog."""
+    """Settings dialog with scan folders, language, and audio output."""
 
-    def __init__(self, parent=None):
+    def __init__(self, player=None, parent=None):
         super().__init__(parent)
+        self._player = player
         self.setWindowTitle(T('settings'))
-        self.setMinimumWidth(450)
+        self.setMinimumWidth(500)
 
         layout = QVBoxLayout(self)
 
-        # Scan folders
+        # --- Audio Output ---
+        grp_audio = QGroupBox(T('audio_output'))
+        grp_audio.setToolTip(T('audio_output_tip'))
+        audio_layout = QVBoxLayout(grp_audio)
+
+        # Device selector
+        dev_row = QHBoxLayout()
+        dev_row.addWidget(QLabel(T('audio_device')))
+        self._device_combo = QComboBox()
+        self._device_combo.setToolTip(T('audio_device_tip'))
+        self._device_combo.setMinimumWidth(280)
+
+        # Populate devices
+        self._devices = []
+        current_dev_name = ''
+        saved_row = db.fetchone("SELECT value FROM config WHERE key = 'audio_device'")
+        saved_name = saved_row['value'] if saved_row else ''
+
+        self._device_combo.addItem(T('audio_device_default'), '')
+        if player:
+            self._devices = player.get_audio_devices()
+            current_dev = player.get_current_device()
+            current_dev_name = current_dev.description() if current_dev else ''
+
+            for dev in self._devices:
+                name = dev.description()
+                suffix = ' *' if dev.isDefault() else ''
+                self._device_combo.addItem(f"{name}{suffix}", name)
+
+            # Select current device
+            if saved_name:
+                for i in range(self._device_combo.count()):
+                    if self._device_combo.itemData(i) == saved_name:
+                        self._device_combo.setCurrentIndex(i)
+                        break
+
+        self._device_combo.currentIndexChanged.connect(self._on_device_changed)
+        dev_row.addWidget(self._device_combo)
+        audio_layout.addLayout(dev_row)
+
+        # Device capabilities display
+        self._caps_label = QLabel('')
+        self._caps_label.setStyleSheet("font-size: 10px; color: #888; padding: 4px 0;")
+        self._caps_label.setWordWrap(True)
+        audio_layout.addWidget(self._caps_label)
+        self._update_caps_display()
+
+        layout.addWidget(grp_audio)
+
+        # --- Scan folders ---
         grp_folders = QGroupBox(T('add_folder'))
         folders_layout = QVBoxLayout(grp_folders)
 
@@ -2358,7 +2596,7 @@ class SettingsDialog(QDialog):
 
         layout.addWidget(grp_folders)
 
-        # Language
+        # --- Language ---
         grp_lang = QGroupBox('Language / Langue')
         lang_layout = QHBoxLayout(grp_lang)
         self._lang_combo = QComboBox()
@@ -2376,6 +2614,49 @@ class SettingsDialog(QDialog):
         buttons.accepted.connect(self._on_accept)
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
+
+    def _on_device_changed(self, index):
+        """Update capabilities display when device selection changes."""
+        self._update_caps_display()
+
+    def _update_caps_display(self):
+        """Show capabilities of the selected device."""
+        if not self._player:
+            self._caps_label.setText('')
+            return
+
+        idx = self._device_combo.currentIndex()
+        if idx <= 0:
+            # System default
+            dev = None
+            for d in self._devices:
+                if d.isDefault():
+                    dev = d
+                    break
+            if not dev and self._devices:
+                dev = self._devices[0]
+        else:
+            dev_name = self._device_combo.itemData(idx)
+            dev = None
+            for d in self._devices:
+                if d.description() == dev_name:
+                    dev = d
+                    break
+
+        if dev:
+            info = self._player.get_device_info(dev)
+            min_r = info.get('min_sample_rate', 0)
+            max_r = info.get('max_sample_rate', 0)
+            max_ch = info.get('max_channels', 0)
+            fmts = info.get('sample_formats', [])
+
+            rate_str = f"{min_r/1000:.0f}–{max_r/1000:.0f}kHz" if min_r and max_r else '?'
+            fmt_str = ', '.join(fmts) if fmts else '?'
+            self._caps_label.setText(
+                T('audio_device_caps', rates=rate_str, channels=max_ch, formats=fmt_str)
+            )
+        else:
+            self._caps_label.setText('')
 
     def _add_folder(self):
         folder = QFileDialog.getExistingDirectory(self, T('add_folder'))
@@ -2396,10 +2677,22 @@ class SettingsDialog(QDialog):
             self._folder_list.takeTopLevelItem(idx)
 
     def _on_accept(self):
+        # Language
         lang = self._lang_combo.currentData()
         set_lang(lang)
         db.execute("INSERT OR REPLACE INTO config(key, value) VALUES('lang', ?)",
                    (lang,), commit=True)
+
+        # Audio device
+        dev_name = self._device_combo.currentData() or ''
+        db.execute("INSERT OR REPLACE INTO config(key, value) VALUES('audio_device', ?)",
+                   (dev_name,), commit=True)
+        if self._player:
+            if dev_name:
+                self._player.set_audio_device_by_name(dev_name)
+            else:
+                self._player.set_audio_device(None)  # System default
+
         self.accept()
 
 
@@ -2562,16 +2855,35 @@ class HelpDialog(QDialog):
         <h3>Music Classification</h3>
         <p><b>Tools → Classify Library</b> — Automatic classification of your tracks:</p>
         <ul>
-        <li><b>Musical period</b> — 200+ composers mapped to Medieval, Renaissance, Baroque,
+        <li><b>Musical period</b> — 350+ composers mapped to Medieval, Renaissance, Baroque,
         Classical, Romantic, Modern, Contemporary periods</li>
-        <li><b>Musical form</b> — 60+ forms detected: Symphony, Concerto, Sonata, Fugue,
-        Nocturne, Opera, Requiem, String Quartet, etc.</li>
+        <li><b>Sub-period</b> — Refined classification: Early/High/Late Baroque,
+        Galant Style, Early/High/Late Romantic, Fin de Siècle, Interwar Modernism</li>
+        <li><b>Musical movement</b> — 20+ styles detected: Impressionism, Expressionism,
+        Neoclassicism, Serialism, Minimalism, Holy Minimalism, Nationalism,
+        Late Romanticism, Neo-Romanticism, Avant-Garde, Film Music, Verismo,
+        Bel Canto, Spectralism, Ars Nova, Franco-Flemish School, Venetian School</li>
+        <li><b>Musical form</b> — 70+ forms detected: Symphony, Concerto, Sonata, Fugue,
+        Nocturne, Opera, Requiem, String Quartet, Bagatelle, Elegy, Romance, etc.</li>
         <li><b>Catalogue number</b> — BWV (Bach), K. (Mozart), Op., D. (Schubert),
         RV (Vivaldi), HWV (Handel), and more</li>
         <li><b>Instrumentation</b> — Piano, Violin, Orchestra, Chamber, Choir, etc.</li>
         <li><b>Key</b> — e.g., "C minor", "E♭ major"</li>
         </ul>
+        <p>Classification data is written directly to audio file metadata
+        (TXXX frames for MP3, Vorbis comments for FLAC/OGG, MP4 atoms).</p>
         <p>Right-click any track → Track Info to see individual classification details.</p>
+
+        <h3>Audio Output & HiFi Chain</h3>
+        <p><b>File → Settings → Audio Output</b> — Select your audio output device (DAC,
+        USB headphones, speakers, etc.). The player bar shows the full audio chain in real time:</p>
+        <ul>
+        <li><b>Quality badge</b> — Hi-Res, CD Quality, Lossless, or Lossy</li>
+        <li><b>Format details</b> — Codec, sample rate, bit depth (e.g. "FLAC · 96kHz/24-bit")</li>
+        <li><b>Output device</b> — Current audio device name (e.g. "→ USB DAC")</li>
+        </ul>
+        <p>Device capabilities (supported sample rates, channel count, bit formats) are displayed
+        in Settings. The selected device is remembered across sessions.</p>
 
         <h3>Audio Quality Indicators</h3>
         <ul>
@@ -2761,16 +3073,36 @@ class HelpDialog(QDialog):
         <h3>Classification Musicale</h3>
         <p><b>Outils → Classifier la bibliothèque</b> — Classification automatique de vos pistes :</p>
         <ul>
-        <li><b>Période musicale</b> — 200+ compositeurs classés par époque : Médiéval,
+        <li><b>Période musicale</b> — 350+ compositeurs classés par époque : Médiéval,
         Renaissance, Baroque, Classique, Romantique, Moderne, Contemporain</li>
-        <li><b>Forme musicale</b> — 60+ formes détectées : Symphonie, Concerto, Sonate, Fugue,
-        Nocturne, Opéra, Requiem, Quatuor à cordes, etc.</li>
+        <li><b>Sous-période</b> — Classification affinée : Premier/Haut/Tardif Baroque,
+        Style galant, Début/Haut/Tardif Romantique, Fin de siècle, Modernisme entre-deux-guerres</li>
+        <li><b>Courant musical</b> — 20+ styles détectés : Impressionnisme, Expressionnisme,
+        Néoclassicisme, Sérialisme, Minimalisme, Minimalisme sacré, Nationalisme,
+        Romantisme tardif, Néo-romantisme, Avant-Garde, Musique de film, Vérisme,
+        Bel Canto, Spectralisme, Ars Nova, École franco-flamande, École vénitienne</li>
+        <li><b>Forme musicale</b> — 70+ formes détectées : Symphonie, Concerto, Sonate, Fugue,
+        Nocturne, Opéra, Requiem, Quatuor à cordes, Bagatelle, Élégie, Romance, etc.</li>
         <li><b>Numéro de catalogue</b> — BWV (Bach), K. (Mozart), Op., D. (Schubert),
         RV (Vivaldi), HWV (Händel), et plus</li>
         <li><b>Instrumentation</b> — Piano, Violon, Orchestre, Musique de chambre, Chœur, etc.</li>
         <li><b>Tonalité</b> — ex. « Do mineur », « Mi♭ majeur »</li>
         </ul>
+        <p>La classification est écrite directement dans les métadonnées des fichiers audio
+        (tags TXXX pour MP3, Vorbis comments pour FLAC/OGG, atoms MP4).</p>
         <p>Clic droit sur une piste → Informations pour voir la classification individuelle.</p>
+
+        <h3>Sortie Audio & Chaîne HiFi</h3>
+        <p><b>Fichier → Paramètres → Sortie Audio</b> — Sélectionnez votre périphérique de sortie
+        (DAC USB, casque, enceintes, etc.). La barre de lecture affiche la chaîne audio complète
+        en temps réel :</p>
+        <ul>
+        <li><b>Badge qualité</b> — Hi-Res, Qualité CD, Sans perte ou Avec perte</li>
+        <li><b>Détails format</b> — Codec, fréquence d'échantillonnage, profondeur (ex. « FLAC · 96kHz/24-bit »)</li>
+        <li><b>Périphérique de sortie</b> — Nom du périphérique actuel (ex. « → USB DAC »)</li>
+        </ul>
+        <p>Les capacités du périphérique (fréquences supportées, nombre de canaux, formats) sont
+        affichées dans les paramètres. Le périphérique sélectionné est mémorisé entre les sessions.</p>
 
         <h3>Indicateurs Qualité Audio</h3>
         <ul>
@@ -3022,6 +3354,37 @@ class StatsDialog(QDialog):
                 html += f'<span style="color:#aaa;">{row["cnt"]}</span></td></tr>'
             html += '</table>'
 
+        # --- Musical Periods ---
+        period_rows = db.fetchall(
+            "SELECT period, COUNT(*) as cnt FROM tracks WHERE period IS NOT NULL "
+            "GROUP BY period ORDER BY "
+            "CASE period "
+            "WHEN 'Medieval' THEN 1 WHEN 'Renaissance' THEN 2 "
+            "WHEN 'Baroque' THEN 3 WHEN 'Classical' THEN 4 "
+            "WHEN 'Romantic' THEN 5 WHEN 'Modern' THEN 6 "
+            "WHEN 'Contemporary' THEN 7 WHEN 'Recent' THEN 8 ELSE 9 END"
+        )
+        if period_rows:
+            period_colors = {
+                'Medieval': '#8d6e63', 'Renaissance': '#a1887f',
+                'Baroque': '#ff8a65', 'Classical': '#4fc3f7',
+                'Romantic': '#e040fb', 'Modern': '#66bb6a',
+                'Contemporary': '#ffa726', 'Recent': '#ef5350',
+            }
+            html += f'<h3 style="color:#81c784;">{T("view_periods")}</h3>'
+            html += '<table cellpadding="4" cellspacing="0" width="100%">'
+            max_cnt = max(r['cnt'] for r in period_rows)
+            for i, row in enumerate(period_rows):
+                bg = '#2a2a2a' if i % 2 == 0 else '#333'
+                color = period_colors.get(row['period'], '#4fc3f7')
+                bar_w = int(row['cnt'] * 250 / max_cnt)
+                html += f'<tr style="background:{bg};">'
+                html += f'<td style="color:#fff; width:150px;">{esc(row["period"])}</td>'
+                html += f'<td><div style="background:{color}; width:{max(bar_w, 2)}px; '
+                html += f'height:14px; border-radius:3px; display:inline-block;"></div> '
+                html += f'<span style="color:#aaa;">{row["cnt"]}</span></td></tr>'
+            html += '</table>'
+
         # --- Most Played ---
         if top_played:
             html += f'<h3 style="color:#81c784;">{T("stats_top_played")}</h3>'
@@ -3269,8 +3632,14 @@ class SmartRadioDialog(QDialog):
             conditions.append("t.album_id = ?")
             params.append(album_id)
 
-        # Era / Year range
+        # Era / Year range — uses period column (classifier) or year fallback
         era_key = self._era_combo.currentData()
+        era_to_period = {
+            'era_medieval': 'Medieval', 'era_renaissance': 'Renaissance',
+            'era_baroque': 'Baroque', 'era_classical': 'Classical',
+            'era_romantic': 'Romantic', 'era_modern': 'Modern',
+            'era_contemporary': 'Contemporary', 'era_recent': 'Recent',
+        }
         if era_key == 'custom':
             y_from = self._year_from.value()
             y_to = self._year_to.value()
@@ -3281,16 +3650,27 @@ class SmartRadioDialog(QDialog):
                 conditions.append("t.year <= ?")
                 params.append(y_to)
         elif era_key:
-            for key, start, end in ERAS:
-                if key == era_key:
-                    if start is not None:
-                        conditions.append("t.year >= ?")
-                        params.append(start)
-                    if end is not None:
-                        conditions.append("t.year <= ?")
-                        params.append(end)
-                    conditions.append("t.year IS NOT NULL")
-                    break
+            period_name = era_to_period.get(era_key)
+            if period_name:
+                # Use stored period classification (more accurate than year alone)
+                # Fall back to year range for unclassified tracks
+                for key, start, end in ERAS:
+                    if key == era_key:
+                        year_conds = []
+                        year_params = []
+                        if start is not None:
+                            year_conds.append("t.year >= ?")
+                            year_params.append(start)
+                        if end is not None:
+                            year_conds.append("t.year <= ?")
+                            year_params.append(end)
+                        year_clause = (" AND ".join(year_conds)
+                                       if year_conds else "1=1")
+                        conditions.append(
+                            f"(t.period = ? OR (t.period IS NULL AND {year_clause}))")
+                        params.append(period_name)
+                        params.extend(year_params)
+                        break
 
         # Quality
         quality = self._quality_combo.currentData()

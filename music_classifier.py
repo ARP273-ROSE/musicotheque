@@ -1,7 +1,13 @@
-"""Classical music classifier — automatic period, form, and catalogue detection.
+"""Classical music classifier — automatic period, form, catalogue, and movement detection.
 
 Uses metadata (composer, title, genre) to classify tracks by musical period,
-form/genre, catalogue number, and instrumentation.
+sub-period, musical movement/style, form/genre, catalogue number,
+and instrumentation.
+
+Covers 350+ composers across all periods (Medieval to Contemporary),
+70+ musical forms, 15+ catalogue number systems, 35+ instruments,
+and 20+ musical movements/styles (Impressionism, Expressionism,
+Serialism, Minimalism, Nationalism, etc.).
 """
 import re
 import logging
@@ -322,6 +328,98 @@ COMPOSER_PERIODS = {
     'Terry Riley': ('Contemporary', 1935, 0),
     'La Monte Young': ('Contemporary', 1935, 0),
 
+    # Additional Romantic
+    'Nikolai Myaskovsky': ('Modern', 1881, 1950),
+    'Alexander Glazunov': ('Romantic', 1865, 1936),
+    'Glazunov': ('Romantic', 1865, 1936),
+    'Moritz Moszkowski': ('Romantic', 1854, 1925),
+    'Moszkowski': ('Romantic', 1854, 1925),
+    'Isaac Albéniz': ('Romantic', 1860, 1909),
+    'Albéniz': ('Romantic', 1860, 1909),
+    'Albeniz': ('Romantic', 1860, 1909),
+    'Enrique Granados': ('Romantic', 1867, 1916),
+    'Granados': ('Romantic', 1867, 1916),
+    'Joaquín Turina': ('Modern', 1882, 1949),
+    'Turina': ('Modern', 1882, 1949),
+    'Joaquín Rodrigo': ('Modern', 1901, 1999),
+    'Rodrigo': ('Modern', 1901, 1999),
+    'Pablo de Sarasate': ('Romantic', 1844, 1908),
+    'Sarasate': ('Romantic', 1844, 1908),
+    'Henryk Wieniawski': ('Romantic', 1835, 1880),
+    'Wieniawski': ('Romantic', 1835, 1880),
+    'Reinhold Glière': ('Modern', 1875, 1956),
+    'Glière': ('Modern', 1875, 1956),
+    'Ernő Dohnányi': ('Modern', 1877, 1960),
+    'Dohnányi': ('Modern', 1877, 1960),
+    'Max Reger': ('Modern', 1873, 1916),
+    'Reger': ('Modern', 1873, 1916),
+    'Ferruccio Busoni': ('Modern', 1866, 1924),
+    'Busoni': ('Modern', 1866, 1924),
+    'Alexander von Zemlinsky': ('Modern', 1871, 1942),
+    'Zemlinsky': ('Modern', 1871, 1942),
+    'Engelbert Humperdinck': ('Romantic', 1854, 1921),
+    'Charles-Valentin Alkan': ('Romantic', 1813, 1888),
+    'Alkan': ('Romantic', 1813, 1888),
+    'Mikhail Ippolitov-Ivanov': ('Romantic', 1859, 1935),
+    'Amy Beach': ('Romantic', 1867, 1944),
+    'Beach': ('Romantic', 1867, 1944),
+    'Cécile Chaminade': ('Romantic', 1857, 1944),
+    'Chaminade': ('Romantic', 1857, 1944),
+    'Lili Boulanger': ('Modern', 1893, 1918),
+    'Nadia Boulanger': ('Modern', 1887, 1979),
+    'Germaine Tailleferre': ('Modern', 1892, 1983),
+    'Tailleferre': ('Modern', 1892, 1983),
+
+    # Additional Modern
+    'William Walton': ('Modern', 1902, 1983),
+    'Walton': ('Modern', 1902, 1983),
+    'Malcolm Arnold': ('Modern', 1921, 2006),
+    'Arnold': ('Modern', 1921, 2006),
+    'Michael Tippett': ('Modern', 1905, 1998),
+    'Tippett': ('Modern', 1905, 1998),
+    'Leonard Bernstein': ('Contemporary', 1918, 1990),
+    'Bernstein': ('Contemporary', 1918, 1990),
+    'Dmitri Kabalevsky': ('Modern', 1904, 1987),
+    'Kabalevsky': ('Modern', 1904, 1987),
+    'Nikolai Kapustin': ('Contemporary', 1937, 2020),
+    'Kapustin': ('Contemporary', 1937, 2020),
+    'Bohuslav Martinů': ('Modern', 1890, 1959),
+    'Martinů': ('Modern', 1890, 1959),
+    'Martinu': ('Modern', 1890, 1959),
+    'Einojuhani Rautavaara': ('Contemporary', 1928, 2016),
+    'Rautavaara': ('Contemporary', 1928, 2016),
+    'Aram Khachaturian': ('Modern', 1903, 1978),
+
+    # Additional Contemporary
+    'Osvaldo Golijov': ('Contemporary', 1960, 0),
+    'Kaija Saariaho': ('Contemporary', 1952, 2023),
+    'Saariaho': ('Contemporary', 1952, 2023),
+    'Thomas Adès': ('Contemporary', 1971, 0),
+    'Adès': ('Contemporary', 1971, 0),
+    'George Benjamin': ('Contemporary', 1960, 0),
+    'Magnus Lindberg': ('Contemporary', 1958, 0),
+    'Helmut Lachenmann': ('Contemporary', 1935, 0),
+    'Lachenmann': ('Contemporary', 1935, 0),
+    'Salvatore Sciarrino': ('Contemporary', 1947, 0),
+    'Sciarrino': ('Contemporary', 1947, 0),
+    'Wolfgang Rihm': ('Contemporary', 1952, 2024),
+    'Rihm': ('Contemporary', 1952, 2024),
+    'Tan Dun': ('Contemporary', 1957, 0),
+    'John Corigliano': ('Contemporary', 1938, 0),
+    'Corigliano': ('Contemporary', 1938, 0),
+    'Jennifer Higdon': ('Contemporary', 1962, 0),
+    'Mason Bates': ('Contemporary', 1977, 0),
+    'Caroline Shaw': ('Contemporary', 1982, 0),
+    'Missy Mazzoli': ('Contemporary', 1980, 0),
+    'Nico Muhly': ('Contemporary', 1981, 0),
+    'Max Richter': ('Contemporary', 1966, 0),
+    'Richter': ('Contemporary', 1966, 0),
+    'Ludovico Einaudi': ('Contemporary', 1955, 0),
+    'Einaudi': ('Contemporary', 1955, 0),
+    'Ólafur Arnalds': ('Contemporary', 1986, 0),
+    'Arnalds': ('Contemporary', 1986, 0),
+    'Joep Beving': ('Contemporary', 1976, 0),
+
     # Film composers
     'Ennio Morricone': ('Contemporary', 1928, 2020),
     'Morricone': ('Contemporary', 1928, 2020),
@@ -352,6 +450,18 @@ COMPOSER_PERIODS = {
     'Rozsa': ('Contemporary', 1907, 1995),
     'John Tavener': ('Contemporary', 1944, 2013),
     'Tavener': ('Contemporary', 1944, 2013),
+    'John Barry': ('Contemporary', 1933, 2011),
+    'Elmer Bernstein': ('Contemporary', 1922, 2004),
+    'Rachel Portman': ('Contemporary', 1960, 0),
+    'Howard Blake': ('Contemporary', 1938, 0),
+    'Ludovic Bource': ('Contemporary', 1970, 0),
+    'Alberto Iglesias': ('Contemporary', 1955, 0),
+    'Jóhann Jóhannsson': ('Contemporary', 1969, 2018),
+    'Jóhannsson': ('Contemporary', 1969, 2018),
+    'Nicholas Britell': ('Contemporary', 1980, 0),
+    'Britell': ('Contemporary', 1980, 0),
+    'Ludwig Göransson': ('Contemporary', 1984, 0),
+    'Göransson': ('Contemporary', 1984, 0),
 }
 
 # Pre-built lowercase lookup map for O(1) case-insensitive matching
@@ -368,6 +478,238 @@ PERIODS = [
     ('Contemporary', 1950, 2000),
     ('Recent', 2000, None),
 ]
+
+# --- Musical Movements / Styles ---
+# Maps composers to their primary musical movement(s).
+# A composer can belong to multiple movements.
+
+COMPOSER_MOVEMENTS = {
+    # Ars Nova / Ars Antiqua
+    'Pérotin': 'Ars Antiqua',
+    'Léonin': 'Ars Antiqua',
+    'Philippe de Vitry': 'Ars Nova',
+    'Guillaume de Machaut': 'Ars Nova',
+
+    # Franco-Flemish
+    'Guillaume Dufay': 'Franco-Flemish School',
+    'Johannes Ockeghem': 'Franco-Flemish School',
+    'Josquin des Prez': 'Franco-Flemish School',
+    'Orlando di Lasso': 'Franco-Flemish School',
+    'Adrian Willaert': 'Venetian School',
+    'Giovanni Gabrieli': 'Venetian School',
+
+    # Venetian / Roman School
+    'Giovanni Pierluigi da Palestrina': 'Roman School',
+    'Palestrina': 'Roman School',
+
+    # Impressionism
+    'Claude Debussy': 'Impressionism',
+    'Debussy': 'Impressionism',
+    'Maurice Ravel': 'Impressionism',
+    'Ravel': 'Impressionism',
+    'Erik Satie': 'Impressionism',
+    'Satie': 'Impressionism',
+    'Ottorino Respighi': 'Impressionism',
+    'Respighi': 'Impressionism',
+    'Frederick Delius': 'Impressionism',
+    'Manuel de Falla': 'Impressionism',
+    'de Falla': 'Impressionism',
+    'Isaac Albéniz': 'Impressionism',
+    'Albéniz': 'Impressionism',
+    'Enrique Granados': 'Impressionism',
+    'Granados': 'Impressionism',
+
+    # Expressionism / Second Viennese School
+    'Arnold Schoenberg': 'Expressionism',
+    'Schoenberg': 'Expressionism',
+    'Alban Berg': 'Expressionism',
+    'Berg': 'Expressionism',
+    'Anton Webern': 'Serialism',
+    'Webern': 'Serialism',
+
+    # Neoclassicism
+    'Igor Stravinsky': 'Neoclassicism',
+    'Stravinsky': 'Neoclassicism',
+    'Paul Hindemith': 'Neoclassicism',
+    'Hindemith': 'Neoclassicism',
+    'Francis Poulenc': 'Neoclassicism',
+    'Poulenc': 'Neoclassicism',
+    'Darius Milhaud': 'Neoclassicism',
+    'Milhaud': 'Neoclassicism',
+    'Arthur Honegger': 'Neoclassicism',
+    'Honegger': 'Neoclassicism',
+    'Sergei Prokofiev': 'Neoclassicism',
+    'Prokofiev': 'Neoclassicism',
+    'Germaine Tailleferre': 'Neoclassicism',
+    'Tailleferre': 'Neoclassicism',
+
+    # Nationalism (Romantic)
+    'Bedřich Smetana': 'Nationalism',
+    'Smetana': 'Nationalism',
+    'Antonín Dvořák': 'Nationalism',
+    'Dvořák': 'Nationalism',
+    'Leoš Janáček': 'Nationalism',
+    'Janáček': 'Nationalism',
+    'Edvard Grieg': 'Nationalism',
+    'Grieg': 'Nationalism',
+    'Jean Sibelius': 'Nationalism',
+    'Sibelius': 'Nationalism',
+    'Carl Nielsen': 'Nationalism',
+    'Nielsen': 'Nationalism',
+    'Mikhail Glinka': 'Nationalism',
+    'Glinka': 'Nationalism',
+    'Modest Mussorgsky': 'Nationalism',
+    'Mussorgsky': 'Nationalism',
+    'Nikolai Rimsky-Korsakov': 'Nationalism',
+    'Rimsky-Korsakov': 'Nationalism',
+    'Alexander Borodin': 'Nationalism',
+    'Borodin': 'Nationalism',
+    'Mily Balakirev': 'Nationalism',
+    'Balakirev': 'Nationalism',
+    'Ralph Vaughan Williams': 'Nationalism',
+    'Vaughan Williams': 'Nationalism',
+    'Béla Bartók': 'Nationalism',
+    'Bartók': 'Nationalism',
+    'Zoltán Kodály': 'Nationalism',
+    'Kodály': 'Nationalism',
+    'Heitor Villa-Lobos': 'Nationalism',
+    'Villa-Lobos': 'Nationalism',
+    'Manuel de Falla': 'Nationalism',
+
+    # Late Romanticism / Post-Romanticism
+    'Gustav Mahler': 'Late Romanticism',
+    'Mahler': 'Late Romanticism',
+    'Richard Strauss': 'Late Romanticism',
+    'R. Strauss': 'Late Romanticism',
+    'Sergei Rachmaninoff': 'Late Romanticism',
+    'Rachmaninoff': 'Late Romanticism',
+    'Edward Elgar': 'Late Romanticism',
+    'Elgar': 'Late Romanticism',
+    'Anton Bruckner': 'Late Romanticism',
+    'Bruckner': 'Late Romanticism',
+    'Alexander Scriabin': 'Late Romanticism',
+    'Scriabin': 'Late Romanticism',
+    'Alexander Glazunov': 'Late Romanticism',
+    'Glazunov': 'Late Romanticism',
+    'Max Reger': 'Late Romanticism',
+    'Reger': 'Late Romanticism',
+
+    # Minimalism
+    'Philip Glass': 'Minimalism',
+    'Glass': 'Minimalism',
+    'Steve Reich': 'Minimalism',
+    'Reich': 'Minimalism',
+    'Terry Riley': 'Minimalism',
+    'La Monte Young': 'Minimalism',
+    'John Adams': 'Minimalism',
+    'Arvo Pärt': 'Holy Minimalism',
+    'Pärt': 'Holy Minimalism',
+    'Henryk Górecki': 'Holy Minimalism',
+    'Górecki': 'Holy Minimalism',
+    'John Tavener': 'Holy Minimalism',
+    'Tavener': 'Holy Minimalism',
+
+    # Neo-Romanticism / Post-Minimalism
+    'Max Richter': 'Neo-Romanticism',
+    'Richter': 'Neo-Romanticism',
+    'Ludovico Einaudi': 'Neo-Romanticism',
+    'Einaudi': 'Neo-Romanticism',
+    'Ólafur Arnalds': 'Neo-Romanticism',
+    'Arnalds': 'Neo-Romanticism',
+    'Joep Beving': 'Neo-Romanticism',
+    'Jóhann Jóhannsson': 'Neo-Romanticism',
+    'Jóhannsson': 'Neo-Romanticism',
+
+    # Spectralism
+    'Kaija Saariaho': 'Spectralism',
+    'Saariaho': 'Spectralism',
+    'Magnus Lindberg': 'Spectralism',
+
+    # Avant-Garde / Post-War
+    'Karlheinz Stockhausen': 'Avant-Garde',
+    'Stockhausen': 'Avant-Garde',
+    'Pierre Boulez': 'Serialism',
+    'Boulez': 'Serialism',
+    'John Cage': 'Avant-Garde',
+    'Cage': 'Avant-Garde',
+    'Iannis Xenakis': 'Avant-Garde',
+    'Xenakis': 'Avant-Garde',
+    'György Ligeti': 'Avant-Garde',
+    'Ligeti': 'Avant-Garde',
+    'Krzysztof Penderecki': 'Avant-Garde',
+    'Penderecki': 'Avant-Garde',
+    'Luigi Nono': 'Avant-Garde',
+    'Luciano Berio': 'Avant-Garde',
+    'Berio': 'Avant-Garde',
+    'Helmut Lachenmann': 'Avant-Garde',
+    'Lachenmann': 'Avant-Garde',
+
+    # Film Music
+    'Ennio Morricone': 'Film Music',
+    'Morricone': 'Film Music',
+    'Hans Zimmer': 'Film Music',
+    'Zimmer': 'Film Music',
+    'John Williams': 'Film Music',
+    'Howard Shore': 'Film Music',
+    'James Horner': 'Film Music',
+    'Jerry Goldsmith': 'Film Music',
+    'Bernard Herrmann': 'Film Music',
+    'Herrmann': 'Film Music',
+    'Nino Rota': 'Film Music',
+    'Danny Elfman': 'Film Music',
+    'Alexandre Desplat': 'Film Music',
+    'Joe Hisaishi': 'Film Music',
+    'Thomas Newman': 'Film Music',
+    'Michael Giacchino': 'Film Music',
+    'Ramin Djawadi': 'Film Music',
+    'Alan Silvestri': 'Film Music',
+    'Erich Wolfgang Korngold': 'Film Music',
+    'Korngold': 'Film Music',
+    'Miklós Rózsa': 'Film Music',
+    'Rozsa': 'Film Music',
+    'Nicholas Britell': 'Film Music',
+    'Britell': 'Film Music',
+    'Ludwig Göransson': 'Film Music',
+    'Göransson': 'Film Music',
+    'Hildur Guðnadóttir': 'Film Music',
+    'Jóhann Jóhannsson': 'Film Music',
+
+    # Verismo (Opera)
+    'Giacomo Puccini': 'Verismo',
+    'Puccini': 'Verismo',
+    'Pietro Mascagni': 'Verismo',
+    'Mascagni': 'Verismo',
+    'Ruggero Leoncavallo': 'Verismo',
+    'Leoncavallo': 'Verismo',
+
+    # Bel Canto (Opera)
+    'Gioacchino Rossini': 'Bel Canto',
+    'Rossini': 'Bel Canto',
+    'Gaetano Donizetti': 'Bel Canto',
+    'Donizetti': 'Bel Canto',
+    'Vincenzo Bellini': 'Bel Canto',
+    'Bellini': 'Bel Canto',
+}
+
+# Pre-built lowercase lookup for movements
+_MOVEMENT_LOWER_MAP = {name.lower(): mov for name, mov in COMPOSER_MOVEMENTS.items()}
+
+# Sub-period refinements (more specific than the 8 main periods)
+SUB_PERIODS = {
+    'Early Baroque': (1600, 1650),
+    'High Baroque': (1650, 1700),
+    'Late Baroque': (1700, 1750),
+    'Galant Style': (1720, 1770),
+    'Early Classical': (1750, 1780),
+    'High Classical': (1780, 1820),
+    'Early Romantic': (1820, 1850),
+    'High Romantic': (1850, 1890),
+    'Late Romantic': (1890, 1910),
+    'Fin de Siècle': (1890, 1914),
+    'Interwar Modernism': (1918, 1945),
+    'Post-War Avant-Garde': (1945, 1975),
+    'Post-Minimalism': (1975, 2000),
+}
 
 
 # --- Musical Forms / Genres (pattern → form name) ---
@@ -472,6 +814,32 @@ FORM_PATTERNS = [
     (r'\bCarnival of the Animals\b|\bCarnaval des animaux\b', 'Suite'),
     (r'\bSymphonic Dances?\b|\bDanses symphoniques\b', 'Symphonic Dance'),
     (r'\bLied ohne Worte\b|\bSongs? Without Words\b|\bRomances? sans paroles\b', 'Song Without Words'),
+
+    # Additional forms
+    (r'\bLitany\b|\bLitanie\b|\bLitanei\b', 'Litany'),
+    (r'\bHymn\b|\bHymne\b', 'Hymn'),
+    (r'\bPsalm\b|\bPsaume\b', 'Psalm'),
+    (r'\bAnthem\b|\bAnthème\b', 'Anthem'),
+    (r'\bElegy\b|\bÉlégie\b|\bElegie\b', 'Elegy'),
+    (r'\bSerenad[ae]\b|\bNachtmusik\b|\bPetite musique de nuit\b', 'Serenade'),
+    (r'\bBarcarolle\b|\bBarcarola\b|\bGondellied\b', 'Barcarolle'),
+    (r'\bBagatelle\b', 'Bagatelle'),
+    (r'\bHumoresque\b|\bHumoreske\b', 'Humoresque'),
+    (r'\bDumka\b', 'Dumka'),
+    (r'\bPavane\b|\bPavana\b', 'Pavane'),
+    (r'\bSicilienne\b|\bSiciliana\b|\bSiciliano\b', 'Sicilienne'),
+    (r'\bFandango\b', 'Fandango'),
+    (r'\bHabanera\b|\bHavana\b', 'Habanera'),
+    (r'\bSeguidilla\b', 'Seguidilla'),
+    (r'\bCzárdás\b|\bCsárdás\b|\bCzardas\b', 'Czárdás'),
+    (r'\bRicercar\b|\bRicercare\b', 'Ricercar'),
+    (r'\bCanzona?\b', 'Canzona'),
+    (r'\bSymphonic Variations\b|\bVariations symphoniques\b', 'Symphonic Variations'),
+    (r'\bConcertino\b', 'Concertino'),
+    (r'\bSinfonietta\b', 'Sinfonietta'),
+    (r'\bConcert[oö]\b.*\borchest', 'Concerto'),
+    (r'\bRomance\b|\bRomanze\b', 'Romance'),
+    (r'\bNonet\b|\bNonett\b', 'Nonet'),
 ]
 
 # Compile patterns for performance
@@ -573,6 +941,8 @@ def classify_track(title='', composer='', genre='', album='', year=None):
         catalogue: str or None — catalogue number (e.g., "BWV 1043")
         instruments: list[str] — detected instruments
         key: str or None — musical key (e.g., "D minor")
+        movement: str or None — musical movement/style (e.g., "Impressionism")
+        sub_period: str or None — refined period (e.g., "Late Baroque")
     """
     result = {
         'period': None,
@@ -580,6 +950,8 @@ def classify_track(title='', composer='', genre='', album='', year=None):
         'catalogue': None,
         'instruments': [],
         'key': None,
+        'movement': None,
+        'sub_period': None,
     }
 
     # Combine text fields for searching
@@ -599,6 +971,12 @@ def classify_track(title='', composer='', genre='', album='', year=None):
 
     # 5. Key detection
     result['key'] = detect_key(title)
+
+    # 6. Movement / style detection
+    result['movement'] = detect_movement(composer, genre)
+
+    # 7. Sub-period refinement
+    result['sub_period'] = detect_sub_period(composer, year)
 
     return result
 
@@ -712,6 +1090,92 @@ def detect_key(title):
         if mode:
             key += f" {mode}"
         return key
+
+    return None
+
+
+def detect_movement(composer='', genre=''):
+    """Detect musical movement/style from composer name or genre."""
+    if composer:
+        # Try exact match
+        movement = COMPOSER_MOVEMENTS.get(composer)
+        if movement:
+            return movement
+        # Try case-insensitive
+        comp_lower = composer.lower().strip()
+        movement = _MOVEMENT_LOWER_MAP.get(comp_lower)
+        if movement:
+            return movement
+        # Try partial match
+        for name_lower, mov in _MOVEMENT_LOWER_MAP.items():
+            if name_lower in comp_lower or comp_lower in name_lower:
+                return mov
+
+    # Genre-based fallback
+    if genre:
+        gl = genre.lower()
+        if 'impressionis' in gl:
+            return 'Impressionism'
+        if 'expressionism' in gl:
+            return 'Expressionism'
+        if 'minimalis' in gl:
+            return 'Minimalism'
+        if 'serial' in gl or 'dodecaphon' in gl or 'twelve-tone' in gl:
+            return 'Serialism'
+        if 'neoclassic' in gl or 'neo-classic' in gl:
+            return 'Neoclassicism'
+        if 'avant-garde' in gl or 'avant garde' in gl:
+            return 'Avant-Garde'
+        if 'film' in gl or 'soundtrack' in gl or 'motion picture' in gl or 'bande originale' in gl:
+            return 'Film Music'
+        if 'national' in gl:
+            return 'Nationalism'
+
+    return None
+
+
+def detect_sub_period(composer='', year=None):
+    """Detect sub-period refinement (more specific than main period)."""
+    # Get composer birth/death years for sub-period
+    birth_year = None
+    if composer:
+        entry = COMPOSER_PERIODS.get(composer)
+        if not entry:
+            comp_lower = composer.lower().strip()
+            entry = _COMPOSER_LOWER_MAP.get(comp_lower)
+        if entry:
+            birth_year = entry[1]
+
+    # Use birth year or track year for sub-period classification
+    ref_year = birth_year or year
+    if not ref_year:
+        return None
+
+    # Baroque sub-periods
+    if 1580 <= ref_year < 1650:
+        return 'Early Baroque'
+    if 1650 <= ref_year < 1700:
+        return 'High Baroque'
+    if 1700 <= ref_year < 1750:
+        return 'Late Baroque'
+
+    # Classical sub-periods
+    if 1720 <= ref_year < 1770 and birth_year:
+        return 'Galant Style'
+
+    # Romantic sub-periods
+    if 1790 <= ref_year < 1830 and birth_year:
+        return 'Early Romantic'
+    if 1830 <= ref_year < 1860 and birth_year:
+        return 'High Romantic'
+    if 1860 <= ref_year < 1890 and birth_year:
+        return 'Late Romantic'
+
+    # Modern sub-periods
+    if 1890 <= ref_year < 1914 and birth_year:
+        return 'Fin de Siècle'
+    if 1895 <= ref_year < 1925 and birth_year:
+        return 'Interwar Modernism'
 
     return None
 

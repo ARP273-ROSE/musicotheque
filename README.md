@@ -19,11 +19,15 @@
 
 #### HiFi Audio Player
 - **QMediaPlayer**-based playback with broad codec support via platform decoders
+- **Audio device selection**: choose your DAC, USB headphones, or speakers from Settings
+- **Live audio chain display**: format, sample rate, bit depth, and output device shown in player bar
+- **Device capabilities**: sample rate range, channel count, and supported bit formats
 - **Gapless playback** with pre-buffering
 - Playback queue with **shuffle** and **repeat** modes (off / all / one)
 - **Volume control** with mute toggle
 - **Smart play count**: tracks listened for at least 30 seconds (skipped tracks don't count)
 - **Reset play counts** for privacy (all tracks or individual via context menu)
+- Selected audio device **remembered across sessions**
 
 #### Smart Radio (Ctrl+R)
 - **Play random tracks** with intelligent, combinable filters
@@ -66,10 +70,11 @@
 - Requires ffmpeg
 
 #### Metadata Harmonization
-- **Normalize artist names** (fuzzy matching, merge duplicates)
-- **Clean album titles** (remove junk suffixes like "Remastered", "Deluxe")
-- **Normalize composers** (classical music composer dictionary)
-- **Merge genres** (consolidate similar genres)
+- **Normalize artist names** (fuzzy matching, merge duplicates) — written back to file tags
+- **Clean album titles** (remove junk suffixes like "Remastered", "Deluxe") — written back to file tags
+- **Normalize composers** with 552 aliases for 100+ classical & film composers — written back to file tags
+- **Merge genres** (consolidate similar genres) — written back to file tags
+- **File-level metadata updates**: all corrections are written directly to audio file metadata (MP3/ID3, FLAC, OGG/Opus, M4A/MP4)
 - **Preview changes** before applying, with undo support
 
 #### iTunes Import
@@ -81,12 +86,15 @@
 
 #### Music Classification
 - **Automatic period detection** from composer metadata: Medieval, Renaissance, Baroque, Classical, Romantic, Modern, Contemporary
-- **200+ composers** mapped to historical periods (with birth/death years)
-- **60+ musical forms** detected from titles: Symphony, Concerto, Sonata, Fugue, Nocturne, Opera, Requiem, String Quartet, etc.
+- **419 composers** mapped to historical periods (with birth/death years)
+- **Sub-period refinement**: Early/High/Late Baroque, Galant Style, Early/High/Late Romantic, Fin de Siècle, Interwar Modernism
+- **19 musical movements/styles** detected: Impressionism, Expressionism, Neoclassicism, Serialism, Minimalism, Holy Minimalism, Nationalism, Late Romanticism, Neo-Romanticism, Avant-Garde, Film Music, Verismo, Bel Canto, Spectralism, Ars Nova/Antiqua, Venetian/Roman/Franco-Flemish Schools
+- **70+ musical forms** detected from titles: Symphony, Concerto, Sonata, Fugue, Nocturne, Opera, Requiem, String Quartet, Bagatelle, Elegy, Romance, Pavane, Czárdás, etc.
 - **Catalogue number extraction**: BWV (Bach), K./KV (Mozart), Op., D. (Schubert), RV (Vivaldi), HWV (Handel), and more
 - **Instrumentation detection**: Piano, Violin, Orchestra, Chamber, Choir, etc.
 - **Key detection**: e.g., "C minor", "E-flat major"
-- Batch classification of entire library with period/form statistics
+- **File metadata writing**: classification data written directly to audio file tags (ID3 TXXX, Vorbis comments, MP4 atoms)
+- Batch classification of entire library with period/form/movement statistics
 - Per-track classification visible in track info dialog
 
 #### Online Metadata
@@ -220,10 +228,10 @@ python musicotheque.py
 |------|---------|
 | `musicotheque.py` | Entry point, crash handler, dark theme, hardware detection |
 | `main_window.py` | Full UI: sidebar, track table, player bar, menus, dialogs, stats |
-| `player.py` | QMediaPlayer audio engine with queue, shuffle, repeat |
+| `player.py` | QMediaPlayer audio engine with queue, shuffle, repeat, device selection |
 | `scanner.py` | Folder scanner with mutagen metadata extraction |
 | `database.py` | SQLite WAL, FTS5 full-text search, thread-safe, path relocation |
-| `i18n.py` | Bilingual translation system (370+ keys) |
+| `i18n.py` | Bilingual translation system (410+ keys) |
 | `itunes_import.py` | iTunes Library XML parser (music + podcasts) |
 | `metadata_fetch.py` | MusicBrainz API integration |
 | `podcast_manager.py` | RSS feed parser, episode downloader, iTunes podcast search |

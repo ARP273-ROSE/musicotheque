@@ -107,7 +107,7 @@ def _build_composer_map():
         # Romantic era
         ("Frédéric Chopin", "Chopin, Frédéric", [
             "F. Chopin", "Frederic Chopin", "Fryderyk Chopin",
-            "Chopin",
+            "Chopin", "CHOPIN Frédéric", "Chopin Frédéric",
         ]),
         ("Robert Schumann", "Schumann, Robert", [
             "R. Schumann", "Schumann",
@@ -131,6 +131,9 @@ def _build_composer_map():
             "P.I. Tchaïkovski", "Tchaïkovski", "Tchaikovsky",
             "Tchaikowsky", "Tschaikowsky", "Tschaikowski",
             "Piotr Ilitch Tchaïkovski",
+            "Piotr Ilyitch Tchaïkovsky", "Peter Ilyich Tchaikovsky",
+            "Peter I. Tschaikowsky", "TCHAIKOVSKY Piotr Illicht",
+            "Tchaïkovski Piotr Ilyitch",
         ]),
         ("Antonín Dvořák", "Dvořák, Antonín", [
             "A. Dvorak", "Dvorak", "Dvořák", "Anton Dvorak",
@@ -183,7 +186,7 @@ def _build_composer_map():
         ("Sergei Rachmaninoff", "Rachmaninoff, Sergei", [
             "S. Rachmaninoff", "Rachmaninov", "Rachmaninoff",
             "Sergei Rachmaninov", "Sergueï Rachmaninov",
-            "S. Rachmaninov",
+            "S. Rachmaninov", "RACHMANINOFF Sergeï",
         ]),
         ("Igor Stravinsky", "Stravinsky, Igor", [
             "I. Stravinsky", "Stravinsky", "Strawinsky",
@@ -194,7 +197,8 @@ def _build_composer_map():
         ]),
         ("Dmitri Shostakovich", "Shostakovich, Dmitri", [
             "D. Shostakovich", "Shostakovich", "Schostakowitsch",
-            "Chostakovitch",
+            "Chostakovitch", "Chostakovich", "Dmitri Chostakovich",
+            "Dimitri Chostakovich",
         ]),
         ("Béla Bartók", "Bartók, Béla", [
             "B. Bartok", "Bartok", "Bartók", "Bela Bartok",
@@ -267,6 +271,167 @@ def _build_composer_map():
         ]),
         ("Joe Hisaishi", "Hisaishi, Joe", [
             "J. Hisaishi", "Hisaishi", "久石譲",
+        ]),
+        ("Bernard Herrmann", "Herrmann, Bernard", [
+            "B. Herrmann", "Herrmann", "HERRMANN Bernard",
+        ]),
+        ("Georges Delerue", "Delerue, Georges", [
+            "G. Delerue", "Delerue",
+        ]),
+        ("Lalo Schifrin", "Schifrin, Lalo", [
+            "L. Schifrin", "Schifrin", "SCHIFRIN Lalo",
+        ]),
+        ("Erich Wolfgang Korngold", "Korngold, Erich Wolfgang", [
+            "E.W. Korngold", "Korngold", "KORNGOLD E.W.",
+        ]),
+        ("Nino Rota", "Rota, Nino", [
+            "N. Rota", "Rota",
+        ]),
+        ("Jerry Goldsmith", "Goldsmith, Jerry", [
+            "J. Goldsmith", "Goldsmith",
+        ]),
+        ("Elmer Bernstein", "Bernstein, Elmer", [
+            "E. Bernstein", "BERNSTEIN Elmer",
+        ]),
+        ("John Barry", "Barry, John", [
+            "J. Barry", "BARRY J.", "BARRY John",
+        ]),
+        ("David Raksin", "Raksin, David", [
+            "D. Raksin", "Raksin", "RAKSIN David",
+        ]),
+        # Additional composers for harmonization
+        ("Niccolò Paganini", "Paganini, Niccolò", [
+            "N. Paganini", "Paganini", "Niccolo Paganini",
+        ]),
+        ("Gioacchino Rossini", "Rossini, Gioacchino", [
+            "G. Rossini", "Rossini",
+        ]),
+        ("Gaetano Donizetti", "Donizetti, Gaetano", [
+            "G. Donizetti", "Donizetti",
+        ]),
+        ("Vincenzo Bellini", "Bellini, Vincenzo", [
+            "V. Bellini", "Bellini",
+        ]),
+        ("Georges Bizet", "Bizet, Georges", [
+            "G. Bizet", "Bizet",
+        ]),
+        ("Jules Massenet", "Massenet, Jules", [
+            "J. Massenet", "Massenet",
+        ]),
+        ("Charles Gounod", "Gounod, Charles", [
+            "C. Gounod", "Gounod",
+        ]),
+        ("Jacques Offenbach", "Offenbach, Jacques", [
+            "J. Offenbach", "Offenbach",
+        ]),
+        ("Jean-Philippe Rameau", "Rameau, Jean-Philippe", [
+            "J.P. Rameau", "Rameau",
+        ]),
+        ("François Couperin", "Couperin, François", [
+            "F. Couperin", "Couperin",
+        ]),
+        ("Jean-Baptiste Lully", "Lully, Jean-Baptiste", [
+            "J.B. Lully", "Lully",
+        ]),
+        ("Marc-Antoine Charpentier", "Charpentier, Marc-Antoine", [
+            "M.A. Charpentier", "Charpentier",
+        ]),
+        ("Johann Pachelbel", "Pachelbel, Johann", [
+            "J. Pachelbel", "Pachelbel",
+        ]),
+        ("Dietrich Buxtehude", "Buxtehude, Dietrich", [
+            "D. Buxtehude", "Buxtehude",
+        ]),
+        ("Gustav Holst", "Holst, Gustav", [
+            "G. Holst", "Holst",
+        ]),
+        ("Carl Orff", "Orff, Carl", [
+            "C. Orff", "Orff",
+        ]),
+        ("Aaron Copland", "Copland, Aaron", [
+            "A. Copland", "Copland",
+        ]),
+        ("George Gershwin", "Gershwin, George", [
+            "G. Gershwin", "Gershwin",
+        ]),
+        ("Leonard Bernstein", "Bernstein, Leonard", [
+            "L. Bernstein", "Bernstein",
+        ]),
+        ("Samuel Barber", "Barber, Samuel", [
+            "S. Barber", "Barber",
+        ]),
+        ("Astor Piazzolla", "Piazzolla, Astor", [
+            "A. Piazzolla", "Piazzolla",
+        ]),
+        ("Isaac Albéniz", "Albéniz, Isaac", [
+            "I. Albeniz", "Albeniz", "Albéniz",
+        ]),
+        ("Enrique Granados", "Granados, Enrique", [
+            "E. Granados", "Granados",
+        ]),
+        ("Joaquín Rodrigo", "Rodrigo, Joaquín", [
+            "J. Rodrigo", "Rodrigo", "Joaquin Rodrigo",
+        ]),
+        ("Vangelis", "Vangelis", [
+            "VANGELIS", "Evangelos Papathanassiou",
+        ]),
+        ("Ryuichi Sakamoto", "Sakamoto, Ryuichi", [
+            "R. Sakamoto", "Sakamoto", "坂本龍一",
+        ]),
+        ("Yann Tiersen", "Tiersen, Yann", [
+            "Y. Tiersen", "Tiersen",
+        ]),
+        ("Ramin Djawadi", "Djawadi, Ramin", [
+            "R. Djawadi", "Djawadi",
+        ]),
+        ("Alan Silvestri", "Silvestri, Alan", [
+            "A. Silvestri", "Silvestri",
+        ]),
+        ("Michael Giacchino", "Giacchino, Michael", [
+            "M. Giacchino", "Giacchino",
+        ]),
+        ("Thomas Newman", "Newman, Thomas", [
+            "T. Newman",
+        ]),
+        ("Max Richter", "Richter, Max", [
+            "M. Richter", "Richter",
+        ]),
+        ("Ludovico Einaudi", "Einaudi, Ludovico", [
+            "L. Einaudi", "Einaudi",
+        ]),
+        ("Marin Marais", "Marais, Marin", [
+            "M. Marais", "Marais",
+        ]),
+        ("Alexander Scriabin", "Scriabin, Alexander", [
+            "A. Scriabin", "Scriabin", "Skriabin",
+            "Alexander Skriabin", "Scriabine", "A. Scriabine",
+        ]),
+        ("Alexander Glazunov", "Glazunov, Alexander", [
+            "A. Glazunov", "Glazunov", "Glazounov",
+        ]),
+        ("Bedřich Smetana", "Smetana, Bedřich", [
+            "B. Smetana", "Smetana", "Bedrich Smetana",
+        ]),
+        ("Carl Nielsen", "Nielsen, Carl", [
+            "C. Nielsen", "Nielsen",
+        ]),
+        ("Hugo Wolf", "Wolf, Hugo", [
+            "H. Wolf", "Wolf",
+        ]),
+        ("Max Bruch", "Bruch, Max", [
+            "M. Bruch", "Bruch",
+        ]),
+        ("Christoph Willibald Gluck", "Gluck, Christoph Willibald", [
+            "C.W. Gluck", "Gluck",
+        ]),
+        ("Tomaso Albinoni", "Albinoni, Tomaso", [
+            "T. Albinoni", "Albinoni",
+        ]),
+        ("Hildur Guðnadóttir", "Guðnadóttir, Hildur", [
+            "Hildur Gudnadottir", "Gudnadottir",
+        ]),
+        ("Jóhann Jóhannsson", "Jóhannsson, Jóhann", [
+            "Johann Johannsson", "Johannsson",
         ]),
     ]
 

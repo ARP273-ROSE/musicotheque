@@ -10,7 +10,7 @@ _local = threading.local()
 _db_path = None
 _lock = threading.Lock()
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 4
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS config (
@@ -73,7 +73,15 @@ CREATE TABLE IF NOT EXISTS tracks (
     rating INTEGER DEFAULT 0,
     added_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     scanned_at TIMESTAMP,
-    file_mtime REAL DEFAULT 0
+    file_mtime REAL DEFAULT 0,
+    -- Classification (music_classifier)
+    period TEXT,
+    form TEXT,
+    catalogue TEXT,
+    instruments TEXT,
+    music_key TEXT,
+    movement TEXT,
+    sub_period TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_tracks_title ON tracks(title);
 CREATE INDEX IF NOT EXISTS idx_tracks_album ON tracks(album_id);
@@ -109,11 +117,10 @@ CREATE TABLE IF NOT EXISTS scan_folders (
     auto_scan INTEGER DEFAULT 1
 );
 
--- Full-text search
+-- Full-text search (contentless: triggers maintain data, rebuild via rebuild_fts)
 CREATE VIRTUAL TABLE IF NOT EXISTS tracks_fts USING fts5(
     title, artist_name, album_title, genre, composer,
-    content=tracks,
-    content_rowid=id,
+    content='',
     tokenize='unicode61 remove_diacritics 2'
 );
 
@@ -242,11 +249,42 @@ def init(db_path):
         os.makedirs(db_dir, exist_ok=True)
     conn = get_connection()
     conn.executescript(SCHEMA)
+    # Schema migrations
+    _migrate(conn)
     # Set schema version
     conn.execute("INSERT OR REPLACE INTO config(key, value) VALUES('schema_version', ?)",
                  (str(SCHEMA_VERSION),))
     conn.commit()
-    log.info("Database initialized at %s", db_path)
+    # Optimize query planner statistics
+    try:
+        conn.execute("PRAGMA optimize")
+    except Exception:
+        pass
+    log.info("Database initialized at %s (schema v%d)", db_path, SCHEMA_VERSION)
+
+
+def _migrate(conn):
+    """Run schema migrations for existing databases."""
+    # Check existing columns in tracks table
+    cursor = conn.execute("PRAGMA table_info(tracks)")
+    columns = {row[1] for row in cursor.fetchall()}
+
+    # v3: Add classification columns
+    # v4: Add movement and sub_period columns
+    new_cols = {
+        'period': 'TEXT',
+        'form': 'TEXT',
+        'catalogue': 'TEXT',
+        'instruments': 'TEXT',
+        'music_key': 'TEXT',
+        'movement': 'TEXT',
+        'sub_period': 'TEXT',
+    }
+    for col, typ in new_cols.items():
+        if col not in columns:
+            conn.execute(f"ALTER TABLE tracks ADD COLUMN {col} {typ}")
+            log.info("Migration: added column tracks.%s", col)
+    conn.commit()
 
 
 def get_connection():
@@ -254,11 +292,14 @@ def get_connection():
     if not hasattr(_local, 'conn') or _local.conn is None:
         if _db_path is None:
             raise RuntimeError("Database not initialized. Call database.init() first.")
-        conn = sqlite3.connect(_db_path, timeout=30)
+        conn = sqlite3.connect(_db_path, timeout=120)
         conn.execute("PRAGMA journal_mode=WAL")
         conn.execute("PRAGMA foreign_keys=ON")
-        conn.execute("PRAGMA cache_size=-8000")  # 8MB cache
+        conn.execute("PRAGMA cache_size=-16000")  # 16MB cache (improved from 8MB)
         conn.execute("PRAGMA synchronous=NORMAL")
+        conn.execute("PRAGMA temp_store=MEMORY")   # Temp tables in memory
+        conn.execute("PRAGMA mmap_size=268435456")  # 256MB memory-mapped I/O
+        conn.execute("PRAGMA busy_timeout=120000")  # 120s busy timeout
         conn.row_factory = sqlite3.Row
         _local.conn = conn
     return _local.conn
@@ -275,13 +316,22 @@ def close_connection():
 
 
 def execute(sql, params=(), commit=False):
-    """Execute SQL with thread safety."""
-    conn = get_connection()
-    with _lock:
-        cursor = conn.execute(sql, params)
-        if commit:
-            conn.commit()
-        return cursor
+    """Execute SQL with thread safety and automatic retry on lock."""
+    import time
+    for attempt in range(3):
+        try:
+            conn = get_connection()
+            with _lock:
+                cursor = conn.execute(sql, params)
+                if commit:
+                    conn.commit()
+                return cursor
+        except sqlite3.OperationalError as e:
+            if 'locked' in str(e) and attempt < 2:
+                log.warning("DB locked (attempt %d/3), retrying in 2s...", attempt + 1)
+                time.sleep(2)
+            else:
+                raise
 
 
 def executemany(sql, params_list, commit=True):
@@ -303,20 +353,110 @@ def commit():
 
 def fetchone(sql, params=()):
     """Fetch one row."""
-    return execute(sql, params).fetchone()
+    cursor = execute(sql, params)
+    return cursor.fetchone() if cursor else None
 
 
 def fetchall(sql, params=()):
     """Fetch all rows."""
-    return execute(sql, params).fetchall()
+    cursor = execute(sql, params)
+    return cursor.fetchall() if cursor else []
+
+
+def rebuild_fts():
+    """Rebuild the FTS5 search index from scratch.
+
+    Contentless FTS5 tables (content='') do not support DELETE.
+    Must DROP + CREATE + re-INSERT to rebuild.
+    """
+    conn = get_connection()
+    with _lock:
+        # Drop triggers, FTS table, then recreate
+        conn.execute("DROP TRIGGER IF EXISTS tracks_ai")
+        conn.execute("DROP TRIGGER IF EXISTS tracks_ad")
+        conn.execute("DROP TRIGGER IF EXISTS tracks_au")
+        conn.execute("DROP TABLE IF EXISTS tracks_fts")
+        conn.execute("""
+            CREATE VIRTUAL TABLE tracks_fts USING fts5(
+                title, artist_name, album_title, genre, composer,
+                content='',
+                tokenize='unicode61 remove_diacritics 2'
+            )
+        """)
+        # Recreate triggers
+        conn.execute("""
+            CREATE TRIGGER tracks_ai AFTER INSERT ON tracks BEGIN
+                INSERT INTO tracks_fts(rowid, title, artist_name, album_title, genre, composer)
+                VALUES (
+                    new.id, new.title,
+                    COALESCE((SELECT name FROM artists WHERE id = new.artist_id), ''),
+                    COALESCE((SELECT title FROM albums WHERE id = new.album_id), ''),
+                    COALESCE(new.genre, ''),
+                    COALESCE(new.composer, '')
+                );
+            END
+        """)
+        conn.execute("""
+            CREATE TRIGGER tracks_ad AFTER DELETE ON tracks BEGIN
+                INSERT INTO tracks_fts(tracks_fts, rowid, title, artist_name, album_title, genre, composer)
+                VALUES (
+                    'delete', old.id, old.title,
+                    COALESCE((SELECT name FROM artists WHERE id = old.artist_id), ''),
+                    COALESCE((SELECT title FROM albums WHERE id = old.album_id), ''),
+                    COALESCE(old.genre, ''),
+                    COALESCE(old.composer, '')
+                );
+            END
+        """)
+        conn.execute("""
+            CREATE TRIGGER tracks_au AFTER UPDATE ON tracks BEGIN
+                INSERT INTO tracks_fts(tracks_fts, rowid, title, artist_name, album_title, genre, composer)
+                VALUES (
+                    'delete', old.id, old.title,
+                    COALESCE((SELECT name FROM artists WHERE id = old.artist_id), ''),
+                    COALESCE((SELECT title FROM albums WHERE id = old.album_id), ''),
+                    COALESCE(old.genre, ''),
+                    COALESCE(old.composer, '')
+                );
+                INSERT INTO tracks_fts(rowid, title, artist_name, album_title, genre, composer)
+                VALUES (
+                    new.id, new.title,
+                    COALESCE((SELECT name FROM artists WHERE id = new.artist_id), ''),
+                    COALESCE((SELECT title FROM albums WHERE id = new.album_id), ''),
+                    COALESCE(new.genre, ''),
+                    COALESCE(new.composer, '')
+                );
+            END
+        """)
+        # Re-populate index from joined data
+        conn.execute("""
+            INSERT INTO tracks_fts(rowid, title, artist_name, album_title, genre, composer)
+            SELECT t.id, COALESCE(t.title, ''),
+                   COALESCE(a.name, ''),
+                   COALESCE(al.title, ''),
+                   COALESCE(t.genre, ''),
+                   COALESCE(t.composer, '')
+            FROM tracks t
+            LEFT JOIN artists a ON t.artist_id = a.id
+            LEFT JOIN albums al ON t.album_id = al.id
+        """)
+        conn.commit()
+    log.info("FTS5 index rebuilt")
 
 
 def search_tracks(query, limit=200):
     """Full-text search on tracks."""
     if not query or len(query.strip()) < 2:
         return []
-    # Escape FTS special chars
-    safe_q = query.replace('"', '""').strip()
+    # Sanitize limit
+    limit = max(1, min(1000, int(limit)))
+    # Escape FTS special chars (prevent FTS injection)
+    safe_q = query.replace('"', '""').replace("'", "''").strip()
+    # Remove FTS operators that could cause errors
+    for char in ['*', '(', ')', '{', '}', '^', '~']:
+        safe_q = safe_q.replace(char, '')
+    if not safe_q:
+        return []
     sql = """
         SELECT t.*, a.name as artist_name, al.title as album_title, al.id as _album_id
         FROM tracks_fts fts
@@ -423,7 +563,14 @@ def search_episodes(query, limit=200):
     """Full-text search on podcast episodes."""
     if not query or len(query.strip()) < 2:
         return []
-    safe_q = query.replace('"', '""').strip()
+    # Sanitize limit
+    limit = max(1, min(1000, int(limit)))
+    # Escape FTS special chars
+    safe_q = query.replace('"', '""').replace("'", "''").strip()
+    for char in ['*', '(', ')', '{', '}', '^', '~']:
+        safe_q = safe_q.replace(char, '')
+    if not safe_q:
+        return []
     try:
         return fetchall("""
             SELECT e.*, p.title as podcast_title, p.image_data
@@ -535,6 +682,10 @@ def find_broken_paths():
 def export_library(output_path):
     """Export library metadata to JSON for portability."""
     import json
+    # Validate output path (anti path traversal)
+    output_path = os.path.normpath(os.path.abspath(output_path))
+    if '..' in output_path.split(os.sep):
+        raise ValueError("Path traversal detected in output path")
     data = {
         'tracks': [],
         'playlists': [],
