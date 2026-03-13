@@ -17,6 +17,19 @@
 - **Audio quality indicators**: Hi-Res, CD Quality, Lossless, Lossy badges
 - **Unicode support**: Latin, Greek, Cyrillic, Arabic, Chinese, Japanese, Korean
 
+#### Drag & Drop
+- **Drag tracks** from the library to any folder on your desktop, Explorer, Finder, or Nautilus
+- **Multi-selection** with Ctrl+click and Shift+click — drag multiple files at once
+- Cross-platform: works on Windows, macOS, and Linux file managers
+- Badge shows the number of files being dragged
+
+#### Metadata Editing
+- **iTunes-style metadata editor** via right-click context menu
+- **Single track mode**: edit all 16 fields (title, artist, album, genre, year, track#, disc#, composer, period, movement, sub-period, form, catalogue, instruments, key)
+- **Multi-track batch mode**: edit shared fields across many tracks at once — mixed values show "(keep original)", only changed fields are applied
+- Changes saved to **both database and audio files** (ID3/FLAC/OGG/MP4 tags via mutagen)
+- Adaptive context menu: play, queue, add to playlist, edit metadata, track info, reset play count — all multi-selection aware
+
 #### HiFi Audio Player
 - **QMediaPlayer**-based playback with broad codec support via platform decoders
 - **Audio device selection**: choose your DAC, USB headphones, or speakers from Settings
@@ -140,7 +153,7 @@
 - Export library to portable JSON
 
 #### Bilingual Interface
-- Full **English / French** interface with 400+ translation keys
+- Full **English / French** interface with 410+ translation keys
 - Automatic system language detection
 - All tooltips, menus, dialogs, and help in both languages
 

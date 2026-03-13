@@ -15,7 +15,7 @@ from pathlib import Path
 # Force FFmpeg backend for QMediaPlayer (required for HLS streams like BBC Radio 3)
 os.environ.setdefault('QT_MEDIA_BACKEND', 'ffmpeg')
 
-VERSION = '3.1.0'
+VERSION = '3.2.0'
 APP_NAME = 'MusicOthèque'
 APP_DIR = Path(__file__).parent
 

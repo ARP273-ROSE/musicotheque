@@ -23,7 +23,7 @@ from PyQt6.QtCore import (
 )
 from PyQt6.QtGui import (
     QAction, QKeySequence, QPixmap, QImage, QIcon, QFont,
-    QPalette, QColor
+    QPalette, QColor, QDrag
 )
 
 import database as db
@@ -99,6 +99,60 @@ def _sort_key(text):
     return ''.join(c for c in nfkd if not unicodedata.combining(c))
 
 
+class DragTableView(QTableView):
+    """QTableView with file drag support for Windows/macOS/Linux file managers."""
+
+    def startDrag(self, supportedActions):
+        """Create a proper file-copy drag accepted by Explorer/Finder/Nautilus."""
+        indexes = self.selectionModel().selectedRows()
+        if not indexes:
+            return
+        model = self.model()
+        urls = []
+        seen = set()
+        for idx in indexes:
+            track = None
+            if isinstance(model, TrackTableModel):
+                track = model.trackAt(idx.row())
+            else:
+                track = model.data(idx, Qt.ItemDataRole.UserRole)
+            if not track or not isinstance(track, dict):
+                continue
+            fp = track.get('file_path', '')
+            if not fp or fp in seen:
+                continue
+            # Normalize path for current OS before building URL
+            native_path = str(Path(fp).resolve()) if os.path.isabs(fp) else fp
+            seen.add(fp)
+            urls.append(QUrl.fromLocalFile(native_path))
+        if not urls:
+            return
+
+        mime = QMimeData()
+        mime.setUrls(urls)
+
+        drag = QDrag(self)
+        drag.setMimeData(mime)
+
+        # Drag pixmap: render a small badge with track count
+        count = len(urls)
+        badge_text = (f"  {count} pistes  " if get_lang() == 'fr'
+                      else f"  {count} tracks  ") if count > 1 else ''
+        if badge_text:
+            pixmap = QPixmap(160, 28)
+            pixmap.fill(QColor(50, 50, 50, 220))
+            from PyQt6.QtGui import QPainter
+            painter = QPainter(pixmap)
+            painter.setPen(QColor(230, 230, 230))
+            painter.setFont(QFont('', 10))
+            painter.drawText(pixmap.rect(), Qt.AlignmentFlag.AlignCenter, badge_text)
+            painter.end()
+            drag.setPixmap(pixmap)
+            drag.setHotSpot(pixmap.rect().center())
+
+        drag.exec(Qt.DropAction.CopyAction)
+
+
 class TrackTableModel(QAbstractTableModel):
     """High-performance model for 40K+ tracks. No widget items created."""
 
@@ -168,34 +222,6 @@ class TrackTableModel(QAbstractTableModel):
                 reverse=reverse
             )
         self.layoutChanged.emit()
-
-    def flags(self, index):
-        """Enable drag for all items."""
-        default = super().flags(index)
-        if index.isValid():
-            return default | Qt.ItemFlag.ItemIsDragEnabled
-        return default
-
-    def mimeTypes(self):
-        return ['text/uri-list']
-
-    def mimeData(self, indexes):
-        """Provide file URLs for drag & drop to external apps."""
-        mime = QMimeData()
-        urls = []
-        seen = set()
-        for idx in indexes:
-            if idx.column() != 0:
-                continue
-            track = self.trackAt(idx.row())
-            if not track:
-                continue
-            fp = track.get('file_path', '')
-            if fp and fp not in seen and os.path.exists(fp):
-                seen.add(fp)
-                urls.append(QUrl.fromLocalFile(fp))
-        mime.setUrls(urls)
-        return mime
 
     def _format(self, key, val):
         """Format a cell value for display."""
@@ -646,7 +672,7 @@ class MainWindow(QMainWindow):
 
         # Track table (QTableView + model for 40K+ track performance)
         self._track_model = TrackTableModel(self)
-        self._track_table = QTableView()
+        self._track_table = DragTableView()
         self._track_table.setModel(self._track_model)
         self._track_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self._track_table.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
@@ -657,8 +683,6 @@ class MainWindow(QMainWindow):
         self._track_table.verticalHeader().setDefaultSectionSize(26)
         self._track_table.setShowGrid(False)
         self._track_table.setDragEnabled(True)
-        self._track_table.setDragDropMode(QAbstractItemView.DragDropMode.DragOnly)
-        self._track_table.setDefaultDropAction(Qt.DropAction.CopyAction)
 
         # Load saved column visibility or use defaults
         settings = QSettings('MusicOtheque', 'MusicOtheque')
@@ -2002,21 +2026,29 @@ class MainWindow(QMainWindow):
         menu.addSeparator()
 
         # Add to playlist submenu (adds all selected tracks)
-        pl_menu = menu.addMenu(T('add_to_playlist'))
+        # Limit to 30 playlists max in submenu to avoid screen-filling menu
         playlists = db.fetchall("SELECT id, name FROM playlists ORDER BY name")
-        for pl in playlists:
-            act = pl_menu.addAction(pl['name'])
-            pl_id = pl['id']
-            track_ids = [t.get('id') for t in selected_tracks if t.get('id')]
-            act.triggered.connect(
-                lambda checked, pid=pl_id, tids=track_ids: [
-                    self._add_track_to_playlist(pid, tid) for tid in tids
-                ]
+        track_ids = [t.get('id') for t in selected_tracks if t.get('id')]
+        if len(playlists) <= 30:
+            pl_menu = menu.addMenu(T('add_to_playlist'))
+            for pl in playlists:
+                act = pl_menu.addAction(pl['name'])
+                pl_id = pl['id']
+                act.triggered.connect(
+                    lambda checked, pid=pl_id, tids=track_ids: [
+                        self._add_track_to_playlist(pid, tid) for tid in tids
+                    ]
+                )
+            if playlists:
+                pl_menu.addSeparator()
+            act_new_pl = pl_menu.addAction(T('new_playlist'))
+            act_new_pl.triggered.connect(lambda: self._create_playlist_with_track(track))
+        else:
+            # Too many playlists: show a dialog instead of a submenu
+            act_pl = menu.addAction(T('add_to_playlist') + '...')
+            act_pl.triggered.connect(
+                lambda: self._add_to_playlist_dialog(track_ids, track)
             )
-        if playlists:
-            pl_menu.addSeparator()
-        act_new_pl = pl_menu.addAction(T('new_playlist'))
-        act_new_pl.triggered.connect(lambda: self._create_playlist_with_track(track))
 
         menu.addSeparator()
 
@@ -2135,6 +2167,62 @@ class MainWindow(QMainWindow):
                     (pl_id, track['id']), commit=True
                 )
             self._refresh_playlists_sidebar()
+
+    def _add_to_playlist_dialog(self, track_ids, track):
+        """Show playlist picker dialog when there are too many playlists for a submenu."""
+        from PyQt6.QtWidgets import QListWidget, QListWidgetItem
+        playlists = db.fetchall("SELECT id, name FROM playlists ORDER BY name")
+
+        dlg = QDialog(self)
+        dlg.setWindowTitle(T('add_to_playlist'))
+        dlg.setMinimumSize(350, 400)
+        layout = QVBoxLayout(dlg)
+
+        search = QLineEdit()
+        search.setPlaceholderText(T('search'))
+        search.setClearButtonEnabled(True)
+        layout.addWidget(search)
+
+        lst = QListWidget()
+        for pl in playlists:
+            item = QListWidgetItem(pl['name'])
+            item.setData(Qt.ItemDataRole.UserRole, pl['id'])
+            lst.addItem(item)
+        layout.addWidget(lst, 1)
+
+        # Filter as user types
+        def _filter(text):
+            text = text.lower()
+            for i in range(lst.count()):
+                item = lst.item(i)
+                item.setHidden(text not in item.text().lower())
+        search.textChanged.connect(_filter)
+
+        # Buttons
+        btn_layout = QHBoxLayout()
+        btn_new = QPushButton(T('new_playlist'))
+        btn_ok = QPushButton(T('ok'))
+        btn_cancel = QPushButton(T('cancel'))
+        btn_layout.addWidget(btn_new)
+        btn_layout.addStretch()
+        btn_layout.addWidget(btn_ok)
+        btn_layout.addWidget(btn_cancel)
+        layout.addLayout(btn_layout)
+
+        btn_ok.clicked.connect(dlg.accept)
+        btn_cancel.clicked.connect(dlg.reject)
+        btn_new.clicked.connect(lambda: (
+            dlg.reject(),
+            self._create_playlist_with_track(track)
+        ))
+        lst.doubleClicked.connect(dlg.accept)
+
+        if dlg.exec() == QDialog.DialogCode.Accepted:
+            sel = lst.currentItem()
+            if sel:
+                pl_id = sel.data(Qt.ItemDataRole.UserRole)
+                for tid in track_ids:
+                    self._add_track_to_playlist(pl_id, tid)
 
     def _show_track_info(self, track):
         """Show track information dialog with classification."""
@@ -3322,7 +3410,26 @@ class HelpDialog(QDialog):
         <li><b>Playlists</b> — User and imported playlists</li>
         </ul>
         <p>Right-click any track for a context menu: play, queue, add to playlist,
-        show in file explorer, or view track details.</p>
+        edit metadata, show in file explorer, or view track details.</p>
+        <p><b>Multi-selection</b>: use Ctrl+click or Shift+click to select multiple tracks.
+        Context menu adapts to selection: batch add to queue/playlist, batch metadata editing,
+        batch play count reset.</p>
+
+        <h3>Drag &amp; Drop</h3>
+        <p>Select one or more tracks, then drag them to any folder on your desktop
+        or file manager (Explorer, Finder, Nautilus) to <b>copy the audio files</b>.
+        A badge shows the number of files being dragged. Works on Windows, macOS, and Linux.</p>
+
+        <h3>Metadata Editing</h3>
+        <p>Right-click → <b>Edit Metadata</b> opens an iTunes-style editor:</p>
+        <ul>
+        <li><b>Single track</b>: edit all fields (title, artist, album, genre, year, track#, disc#,
+        composer, period, movement, sub-period, form, catalogue, instruments, key)</li>
+        <li><b>Multiple tracks</b>: batch edit shared fields (artist, album, genre, year, composer,
+        period, movement, etc.). Fields with mixed values show "(keep original)" — only changed
+        fields are applied.</li>
+        </ul>
+        <p>Changes are saved to both the database and the audio files (ID3/FLAC/OGG/MP4 tags).</p>
 
         <h3>Playback Controls</h3>
         <ul>
@@ -3537,7 +3644,27 @@ class HelpDialog(QDialog):
         <li><b>Playlists</b> — Playlists utilisateur et importées</li>
         </ul>
         <p>Clic droit sur une piste pour le menu contextuel : lire, mettre en file,
-        ajouter à une playlist, afficher dans l'explorateur, ou voir les détails.</p>
+        ajouter à une playlist, modifier les métadonnées, afficher dans l'explorateur, ou voir les détails.</p>
+        <p><b>Sélection multiple</b> : Ctrl+clic ou Shift+clic pour sélectionner plusieurs pistes.
+        Le menu contextuel s'adapte : ajout groupé en file/playlist, édition groupée des métadonnées,
+        réinitialisation groupée des compteurs.</p>
+
+        <h3>Glisser-Déposer</h3>
+        <p>Sélectionnez une ou plusieurs pistes, puis glissez-les vers un dossier sur votre bureau
+        ou gestionnaire de fichiers (Explorateur, Finder, Nautilus) pour <b>copier les fichiers audio</b>.
+        Un badge affiche le nombre de fichiers glissés. Fonctionne sur Windows, macOS et Linux.</p>
+
+        <h3>Édition des Métadonnées</h3>
+        <p>Clic droit → <b>Modifier les métadonnées</b> ouvre un éditeur style iTunes :</p>
+        <ul>
+        <li><b>Piste unique</b> : modifier tous les champs (titre, artiste, album, genre, année, n° piste, n° CD,
+        compositeur, période, courant, sous-période, forme, catalogue, instruments, tonalité)</li>
+        <li><b>Pistes multiples</b> : édition groupée des champs partagés (artiste, album, genre, année,
+        compositeur, période, courant, etc.). Les champs mixtes affichent « (conserver l'original) » —
+        seuls les champs modifiés sont appliqués.</li>
+        </ul>
+        <p>Les modifications sont sauvegardées dans la base de données et dans les fichiers audio
+        (tags ID3/FLAC/OGG/MP4).</p>
 
         <h3>Contrôles de Lecture</h3>
         <ul>
