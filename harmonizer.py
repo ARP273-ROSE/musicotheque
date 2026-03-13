@@ -121,7 +121,7 @@ def _build_composer_map():
             "Mendelssohn",
         ]),
         ("Franz Liszt", "Liszt, Franz", [
-            "F. Liszt", "Liszt",
+            "F. Liszt", "Liszt", "Frans Liszt",
         ]),
         ("Johannes Brahms", "Brahms, Johannes", [
             "J. Brahms", "Brahms",
@@ -134,6 +134,7 @@ def _build_composer_map():
             "Piotr Ilyitch Tchaïkovsky", "Peter Ilyich Tchaikovsky",
             "Peter I. Tschaikowsky", "TCHAIKOVSKY Piotr Illicht",
             "Tchaïkovski Piotr Ilyitch",
+            "Pyotr Il'yich Tchaikovsky", "Pyotr Il\u2019yich Tchaikovsky",
         ]),
         ("Antonín Dvořák", "Dvořák, Antonín", [
             "A. Dvorak", "Dvorak", "Dvořák", "Anton Dvorak",
@@ -190,10 +191,12 @@ def _build_composer_map():
         ]),
         ("Igor Stravinsky", "Stravinsky, Igor", [
             "I. Stravinsky", "Stravinsky", "Strawinsky",
+            "Igor Strawinsky", "Stravinskij", "Stravinski",
         ]),
         ("Sergei Prokofiev", "Prokofiev, Sergei", [
             "S. Prokofiev", "Prokofiev", "Prokofieff",
-            "Sergei Prokofieff",
+            "Sergei Prokofieff", "Serge Prokofiev", "Sergey Prokofiev",
+            "Prokofjev", "Prokofjew",
         ]),
         ("Dmitri Shostakovich", "Shostakovich, Dmitri", [
             "D. Shostakovich", "Shostakovich", "Schostakowitsch",
@@ -215,7 +218,7 @@ def _build_composer_map():
         ]),
         ("Modest Mussorgsky", "Mussorgsky, Modest", [
             "M. Mussorgsky", "Mussorgsky", "Moussorgski",
-            "Moussorgsky",
+            "Moussorgsky", "Modest Moussorgsky",
         ]),
         ("Alexander Borodin", "Borodin, Alexander", [
             "A. Borodin", "Borodin", "Borodine",
@@ -699,6 +702,79 @@ _GENRE_MAP = {
     'minimal': 'Minimal',
     'minimalism': 'Minimal',
     'minimalisme': 'Minimal',
+
+    # Italian
+    'classica': 'Classical',
+    'film/videogiochi': 'Soundtrack',
+    'bambini': "Children's",
+    'musica classica': 'Classical',
+    'colonne sonore': 'Soundtrack',
+    'audiolibri': 'Audiobook',
+
+    # French (additional)
+    'musiques du monde': 'World',
+    'musiques maoris.': 'World',
+    'soundtracks': 'Soundtrack',
+
+    # Additional classical sub-genres
+    'vocal': 'Vocal',
+    'vocal music': 'Vocal',
+    'keyboard': 'Classical',
+    '20th century classical': 'Contemporary Classical',
+    '20th century': 'Contemporary Classical',
+    'contemporain': 'Contemporary Classical',
+    'novelty': 'Novelty',
+    'musical': 'Musical',
+    'comédie musicale': 'Musical',
+    'languages': 'Spoken Word',
+    'other': 'Other',
+    'misc': 'Other',
+    'miscellaneous': 'Other',
+    'divers': 'Other',
+
+    # Chamber music variants
+    'chamber': 'Chamber Music',
+
+    # Opera variants
+    'oper': 'Opera',
+
+    # Japanese
+    'クラシック': 'Classical',
+
+    # Meditative / relaxation
+    'meditative': 'New Age',
+    'méditation': 'New Age',
+
+    # Ballet
+    'ballet': 'Ballet',
+
+    # Tango
+    'tango': 'Tango',
+
+    # Early music
+    'early music': 'Early Music',
+    'musique ancienne': 'Early Music',
+
+    # Instrumental
+    'instrumental': 'Instrumental',
+
+    # Misc French
+    'sciences naturelles': 'Spoken Word',
+    'philosophie': 'Spoken Word',
+    'carrière': 'Spoken Word',
+    'décone': 'Comedy',
+    'génériques': 'Soundtrack',
+    'theme': 'Soundtrack',
+    'bbc prom\'s 2008': 'Classical',
+
+    # Dance / Electronic
+    'dance': 'Electronic',
+    'electronica & dance': 'Electronic',
+    'electronica dance': 'Electronic',
+    'ambient alternative': 'Ambient',
+
+    # Children's variant
+    'childrens': "Children's",
 }
 
 # ---------------------------------------------------------------------------
@@ -978,11 +1054,39 @@ def normalize_composer(name):
     original = name
     name = _normalize_whitespace(name)
 
+    # Strip year suffixes: "Name (1685-1750)", "Name (1882; 1971)" -> "Name"
+    name = re.sub(r'\s*\(\s*\*?\d{4}\s*[-–—;,]\s*\d{0,4}\s*\)', '', name).strip()
+    # Strip "Name (1973- )" or "Name (1973)" or "Name (*1937)" pattern
+    name = re.sub(r'\s*\(\s*\*?\d{4}\s*[-–—]?\s*\)', '', name).strip()
+    # Strip role tags: "[Composer]", "[Author]", etc.
+    name = re.sub(r'\s*\[\w+\]', '', name).strip()
+    # Strip "Last, First" -> "First Last" (common in tagged metadata)
+    # Only when single-word last name, followed by capitalized first name
+    if re.match(r'^[A-Z][a-zà-ÿ]+,\s+[A-Z]', name) and ';' not in name and '/' not in name and name.count(',') == 1:
+        parts = name.split(',', 1)
+        if len(parts) == 2 and len(parts[0].split()) == 1:
+            name = f"{parts[1].strip()} {parts[0].strip()}"
+
     # Handle multiple composers separated by ; or /
-    if ';' in name or '/' in name:
-        composers = re.split(r'\s*[;/]\s*', name)
+    # Note: " - " only treated as separator when between two capitalized words
+    # (avoids splitting "Lennon - McCartney" or "Arr. Name")
+    has_separator = ';' in name or '/' in name
+    if not has_separator and re.search(r'[A-Z][a-zà-ÿ]+\s+[-–—]\s+[A-Z]', name):
+        # Only split on " - " if both sides look like names (capitalized)
+        has_separator = True
+    if has_separator:
+        composers = re.split(r'\s*[;/]\s*|\s+[-–—]\s+', name)
         results = [normalize_composer(c) for c in composers if c.strip()]
         if results:
+            # Deduplicate (same canonical can appear from "Name; Name, First [Composer]")
+            seen = set()
+            unique_results = []
+            for r in results:
+                key = r['canonical'].lower()
+                if key not in seen:
+                    seen.add(key)
+                    unique_results.append(r)
+            results = unique_results
             canonicals = [r['canonical'] for r in results]
             sort_names = [r['sort_name'] for r in results]
             combined = '; '.join(canonicals)

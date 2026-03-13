@@ -446,6 +446,72 @@ def classify_all(write_to_files=True):
     return classified
 
 
+def sync_metadata_to_files(batch_size=500):
+    """Sync harmonized metadata from DB to audio files.
+
+    Only writes to files where DB values differ from file tags.
+    Processes in batches for efficiency and progress tracking.
+
+    Returns (checked, written, errors, inaccessible).
+    """
+    import database as db
+    from scanner import read_metadata, write_metadata
+
+    log.info("=== SYNC METADATA → FILES ===")
+    t0 = time.time()
+
+    tracks = db.fetchall("""
+        SELECT t.id, t.composer, t.genre, t.file_path
+        FROM tracks t
+        WHERE t.file_path IS NOT NULL
+          AND (t.composer IS NOT NULL OR t.genre IS NOT NULL)
+    """)
+
+    total = len(tracks)
+    checked = 0
+    written = 0
+    errors = 0
+    inaccessible = 0
+
+    for i, t in enumerate(tracks):
+        path = t['file_path']
+        if not os.path.exists(path):
+            inaccessible += 1
+            continue
+
+        checked += 1
+        try:
+            meta = read_metadata(path)
+            if not meta:
+                errors += 1
+                continue
+
+            updates = {}
+            if t['composer'] and meta.get('composer') and t['composer'] != meta['composer']:
+                updates['composer'] = t['composer']
+            if t['genre'] and meta.get('genre') and t['genre'] != meta['genre']:
+                updates['genre'] = t['genre']
+
+            if updates:
+                if write_metadata(path, updates):
+                    written += 1
+                else:
+                    errors += 1
+        except Exception as e:
+            errors += 1
+            if errors <= 5:
+                log.warning("  Error syncing %s: %s", os.path.basename(path), e)
+
+        if (i + 1) % batch_size == 0:
+            elapsed = time.time() - t0
+            log.info("  %d/%d checked, %d written (%.0fs)", i + 1, total, written, elapsed)
+
+    elapsed = time.time() - t0
+    log.info("Sync complete: %d checked, %d written, %d errors, %d inaccessible (%.0fs)",
+             checked, written, errors, inaccessible, elapsed)
+    return checked, written, errors, inaccessible
+
+
 def generate_smart_playlists():
     """Generate intelligent playlists based on metadata analysis.
 
