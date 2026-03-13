@@ -124,6 +124,31 @@ def _shortcut_paths_valid(app_name: str, project: Path, main_script: str) -> boo
 
 
 
+def _copy_icon_locally(icon_source: Path) -> Path:
+    """Copy icon to local storage so .lnk shortcuts display it reliably.
+
+    Network/NAS paths may not resolve for shortcut icons on Windows.
+    Returns the local copy path, or the original if copy fails.
+    """
+    if not icon_source.exists():
+        return icon_source
+    local_dir = Path(os.environ.get("LOCALAPPDATA", "")) / "MusicOtheque"
+    if not local_dir.parent.exists():
+        return icon_source
+    try:
+        local_dir.mkdir(parents=True, exist_ok=True)
+        local_icon = local_dir / icon_source.name
+        # Only copy if source is newer or local doesn't exist
+        if not local_icon.exists() or icon_source.stat().st_mtime > local_icon.stat().st_mtime:
+            import shutil
+            shutil.copy2(icon_source, local_icon)
+            logger.info("Icon copied locally: %s", local_icon)
+        return local_icon
+    except Exception as e:
+        logger.debug("Could not copy icon locally: %s", e)
+        return icon_source
+
+
 def _create_windows_shortcut(app_name: str, main_script: str, icon_file: str,
                              project: Path) -> bool:
     """Create .lnk shortcut on Windows desktop.
@@ -136,7 +161,7 @@ def _create_windows_shortcut(app_name: str, main_script: str, icon_file: str,
     import subprocess
     desktop = _desktop_path()
     launch_bat = project / "launch.bat"
-    icon_path = project / icon_file
+    icon_path = _copy_icon_locally(project / icon_file)
     shortcut_path = desktop / f"{app_name}.lnk"
 
     # Sanitize all values for PowerShell string interpolation
