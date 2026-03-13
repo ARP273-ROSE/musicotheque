@@ -15,21 +15,14 @@ from pathlib import Path
 # Force FFmpeg backend for QMediaPlayer (required for HLS streams like BBC Radio 3)
 os.environ.setdefault('QT_MEDIA_BACKEND', 'ffmpeg')
 
-VERSION = '3.2.0'
+VERSION = '3.3.0'
 APP_NAME = 'MusicOthèque'
 APP_DIR = Path(__file__).parent
 
 
 def _get_data_dir():
-    """Cross-platform data directory."""
-    system = platform.system()
-    if system == 'Windows':
-        base = Path(os.environ.get('APPDATA', str(Path.home())))
-    elif system == 'Darwin':
-        base = Path.home() / 'Library' / 'Application Support'
-    else:
-        base = Path(os.environ.get('XDG_DATA_HOME', str(Path.home() / '.local' / 'share')))
-    return base / 'MusicOtheque'
+    """Data directory = project directory (portable across PCs/NAS/Linux)."""
+    return APP_DIR
 
 
 DATA_DIR = _get_data_dir()
@@ -185,6 +178,96 @@ def check_crash_report():
         CRASH_PATH.unlink(missing_ok=True)
 
 
+def migrate_from_appdata():
+    """Check for a previous database in %APPDATA%/MusicOtheque/ and offer to migrate.
+
+    This handles the transition from per-user data storage to portable
+    project-directory storage (required for multi-PC/NAS access).
+    """
+    import shutil
+    import sqlite3
+
+    # Only look for old data on Windows (Linux/macOS never used this path)
+    if platform.system() != 'Windows':
+        return False
+
+    appdata = os.environ.get('APPDATA', '')
+    if not appdata:
+        return False
+
+    old_dir = Path(appdata) / 'MusicOtheque'
+    old_db = old_dir / 'musicotheque.db'
+
+    # Skip if old DB doesn't exist or if current DB already has data
+    if not old_db.exists():
+        return False
+    if DB_PATH.exists() and DB_PATH.stat().st_size > 4096:
+        # Current DB already has data, skip migration
+        return False
+
+    # Check if old DB has actual content
+    try:
+        conn = sqlite3.connect(str(old_db), timeout=5)
+        conn.row_factory = sqlite3.Row
+        row = conn.execute("SELECT COUNT(*) as cnt FROM tracks").fetchone()
+        track_count = row['cnt'] if row else 0
+        row = conn.execute("SELECT COUNT(*) as cnt FROM playlists").fetchone()
+        playlist_count = row['cnt'] if row else 0
+        conn.close()
+    except Exception as e:
+        logging.debug("Could not read old DB at %s: %s", old_db, e)
+        return False
+
+    if track_count == 0:
+        return False
+
+    # Ask user
+    from PyQt6.QtWidgets import QMessageBox
+    from i18n import T
+
+    msg = QMessageBox()
+    msg.setWindowTitle(T('migrate_title'))
+    msg.setIcon(QMessageBox.Icon.Question)
+    msg.setText(T('migrate_message', path=str(old_dir),
+                  tracks=track_count, playlists=playlist_count))
+    msg.setStandardButtons(
+        QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+    )
+    msg.setDefaultButton(QMessageBox.StandardButton.Yes)
+
+    if msg.exec() != QMessageBox.StandardButton.Yes:
+        return False
+
+    # Copy the database (and WAL/SHM if present)
+    try:
+        shutil.copy2(str(old_db), str(DB_PATH))
+        for ext in ('.db-wal', '.db-shm'):
+            old_extra = old_dir / f'musicotheque{ext}'
+            if old_extra.exists():
+                shutil.copy2(str(old_extra), str(DATA_DIR / f'musicotheque{ext}'))
+
+        # Also copy backups if they exist
+        old_backups = old_dir / 'backups'
+        if old_backups.exists():
+            for bf in old_backups.iterdir():
+                if bf.suffix == '.db':
+                    shutil.copy2(str(bf), str(BACKUP_DIR / bf.name))
+
+        logging.info("Migrated database from %s (%d tracks)", old_dir, track_count)
+        QMessageBox.information(
+            None, APP_NAME,
+            T('migrate_success', tracks=track_count)
+        )
+        return True
+    except Exception as e:
+        logging.error("Migration failed: %s", e)
+        QMessageBox.warning(
+            None, APP_NAME,
+            T('migrate_error', error=str(e))
+        )
+        return False
+
+
 def check_for_updates():
     """Check GitHub releases for updates (background, non-blocking)."""
     import threading
@@ -333,9 +416,13 @@ def main():
 
     # Initialize database
     import database
-    from i18n import detect_language
+    from i18n import detect_language, T
 
     detect_language()
+
+    # Migrate from old %APPDATA% location if needed (before database.init)
+    migrate_from_appdata()
+
     database.init(str(DB_PATH))
 
     # Restore language preference
@@ -358,6 +445,32 @@ def main():
     from main_window import MainWindow
     window = MainWindow()
     window.show()
+
+    # First-launch: if library is empty, offer to add a music folder
+    stats = database.get_library_stats()
+    scan_folders = database.fetchall("SELECT path FROM scan_folders")
+    if stats['tracks'] == 0 and not scan_folders:
+        from PyQt6.QtWidgets import QMessageBox
+        msg = QMessageBox()
+        msg.setWindowTitle(T('welcome_title'))
+        msg.setIcon(QMessageBox.Icon.Information)
+        msg.setText(T('welcome_message'))
+        msg.setStandardButtons(
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+        )
+        msg.setDefaultButton(QMessageBox.StandardButton.Yes)
+        if msg.exec() == QMessageBox.StandardButton.Yes:
+            window._on_add_folder()
+    elif scan_folders:
+        # Check for unreachable scan folders (multi-PC/NAS scenario)
+        broken = [r['path'] for r in scan_folders if not os.path.isdir(r['path'])]
+        if broken:
+            from PyQt6.QtWidgets import QMessageBox
+            folder_list = '\n'.join(f'  \u2022 {p}' for p in broken)
+            QMessageBox.warning(
+                window, T('folders_check_title'),
+                T('folders_check_message', folders=folder_list)
+            )
 
     # Offer desktop shortcut on first launch
     # (json already imported at top)

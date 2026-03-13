@@ -99,16 +99,68 @@ def _sort_key(text):
     return ''.join(c for c in nfkd if not unicodedata.combining(c))
 
 
+TRACK_MIME_TYPE = 'application/x-musicotheque-track-ids'
+
+
+class PlaylistSidebar(QTreeWidget):
+    """Sidebar that accepts track drops on playlist items."""
+
+    tracks_dropped = pyqtSignal(int, list)  # playlist_id, [track_ids]
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setAcceptDrops(True)
+
+    def dragEnterEvent(self, event):
+        if event.mimeData().hasFormat(TRACK_MIME_TYPE):
+            event.acceptProposedAction()
+        else:
+            super().dragEnterEvent(event)
+
+    def dragMoveEvent(self, event):
+        if event.mimeData().hasFormat(TRACK_MIME_TYPE):
+            item = self.itemAt(event.position().toPoint())
+            if item:
+                view_id = item.data(0, Qt.ItemDataRole.UserRole)
+                if view_id and str(view_id).startswith('playlist:'):
+                    event.acceptProposedAction()
+                    return
+            event.ignore()
+        else:
+            super().dragMoveEvent(event)
+
+    def dropEvent(self, event):
+        if event.mimeData().hasFormat(TRACK_MIME_TYPE):
+            item = self.itemAt(event.position().toPoint())
+            if not item:
+                return
+            view_id = item.data(0, Qt.ItemDataRole.UserRole)
+            if not view_id or not str(view_id).startswith('playlist:'):
+                return
+            try:
+                pl_id = int(str(view_id).split(':')[1])
+            except (IndexError, ValueError):
+                return
+            import json
+            data = bytes(event.mimeData().data(TRACK_MIME_TYPE)).decode('utf-8')
+            track_ids = json.loads(data)
+            self.tracks_dropped.emit(pl_id, track_ids)
+            event.acceptProposedAction()
+        else:
+            super().dropEvent(event)
+
+
 class DragTableView(QTableView):
     """QTableView with file drag support for Windows/macOS/Linux file managers."""
 
     def startDrag(self, supportedActions):
-        """Create a proper file-copy drag accepted by Explorer/Finder/Nautilus."""
+        """Create a drag with file URLs (external) + track IDs (internal playlists)."""
         indexes = self.selectionModel().selectedRows()
         if not indexes:
             return
         model = self.model()
         urls = []
+        track_ids = []
         seen = set()
         for idx in indexes:
             track = None
@@ -118,6 +170,10 @@ class DragTableView(QTableView):
                 track = model.data(idx, Qt.ItemDataRole.UserRole)
             if not track or not isinstance(track, dict):
                 continue
+            # Collect track ID for internal playlist drops
+            tid = track.get('id')
+            if tid:
+                track_ids.append(tid)
             fp = track.get('file_path', '')
             if not fp or fp in seen:
                 continue
@@ -125,11 +181,16 @@ class DragTableView(QTableView):
             native_path = str(Path(fp).resolve()) if os.path.isabs(fp) else fp
             seen.add(fp)
             urls.append(QUrl.fromLocalFile(native_path))
-        if not urls:
+        if not urls and not track_ids:
             return
 
         mime = QMimeData()
-        mime.setUrls(urls)
+        if urls:
+            mime.setUrls(urls)
+        # Embed track IDs for internal drag-to-playlist
+        if track_ids:
+            import json
+            mime.setData(TRACK_MIME_TYPE, json.dumps(track_ids).encode('utf-8'))
 
         drag = QDrag(self)
         drag.setMimeData(mime)
@@ -655,7 +716,7 @@ class MainWindow(QMainWindow):
         self._splitter = QSplitter(Qt.Orientation.Horizontal)
 
         # --- Sidebar ---
-        self._sidebar = QTreeWidget()
+        self._sidebar = PlaylistSidebar()
         self._sidebar.setHeaderHidden(True)
         self._sidebar.setMinimumWidth(180)
         self._sidebar.setMaximumWidth(300)
@@ -1225,6 +1286,9 @@ class MainWindow(QMainWindow):
 
         # Sidebar
         self._sidebar.currentItemChanged.connect(self._on_sidebar_changed)
+        self._sidebar.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self._sidebar.customContextMenuRequested.connect(self._on_sidebar_context_menu)
+        self._sidebar.tracks_dropped.connect(self._on_tracks_dropped_to_playlist)
 
         # Search
         self._search_timer = QTimer()
@@ -2078,6 +2142,14 @@ class MainWindow(QMainWindow):
         act_explorer = menu.addAction(T('show_in_explorer'))
         act_explorer.triggered.connect(lambda: self._show_in_explorer(track))
 
+        # Remove from playlist (only when viewing a playlist)
+        if self._current_view.startswith('playlist:'):
+            menu.addSeparator()
+            act_rm_pl = menu.addAction(T('remove_from_playlist'))
+            act_rm_pl.triggered.connect(
+                lambda: self._remove_tracks_from_playlist(track_ids)
+            )
+
         # Reset play count
         has_plays = any(t.get('play_count', 0) > 0 for t in selected_tracks)
         if has_plays:
@@ -2229,6 +2301,115 @@ class MainWindow(QMainWindow):
                 pl_id = sel.data(Qt.ItemDataRole.UserRole)
                 for tid in track_ids:
                     self._add_track_to_playlist(pl_id, tid)
+
+    # --- Sidebar context menu & playlist management ---
+
+    def _on_sidebar_context_menu(self, pos):
+        """Right-click context menu on sidebar items."""
+        item = self._sidebar.itemAt(pos)
+        if not item:
+            return
+
+        menu = QMenu(self)
+
+        # Click on "Playlists" header → create new playlist
+        if item is self._pl_root:
+            act_new = menu.addAction(T('new_playlist'))
+            act_new.triggered.connect(self._create_empty_playlist)
+            menu.exec(self._sidebar.viewport().mapToGlobal(pos))
+            return
+
+        # Click on a playlist item
+        view_id = item.data(0, Qt.ItemDataRole.UserRole)
+        if not view_id or not str(view_id).startswith('playlist:'):
+            return
+
+        try:
+            pl_id = int(str(view_id).split(':')[1])
+        except (IndexError, ValueError):
+            return
+
+        pl_name = item.text(0)
+
+        act_rename = menu.addAction(T('rename_playlist'))
+        act_rename.triggered.connect(lambda: self._rename_playlist(pl_id, pl_name))
+
+        act_delete = menu.addAction(T('delete_playlist'))
+        act_delete.triggered.connect(lambda: self._delete_playlist(pl_id, pl_name))
+
+        menu.exec(self._sidebar.viewport().mapToGlobal(pos))
+
+    def _create_empty_playlist(self):
+        """Create a new empty playlist."""
+        name, ok = QInputDialog.getText(self, T('new_playlist'), T('new_playlist'))
+        if ok and name.strip():
+            db.execute("INSERT INTO playlists(name) VALUES(?)",
+                       (name.strip(),), commit=True)
+            self._refresh_playlists_sidebar()
+            self._status_bar.showMessage(T('new_playlist') + f': {name.strip()}', 3000)
+
+    def _rename_playlist(self, pl_id, old_name):
+        """Rename a playlist."""
+        name, ok = QInputDialog.getText(
+            self, T('rename_playlist'), T('rename_playlist'),
+            text=old_name
+        )
+        if ok and name.strip() and name.strip() != old_name:
+            db.execute("UPDATE playlists SET name = ? WHERE id = ?",
+                       (name.strip(), pl_id), commit=True)
+            self._refresh_playlists_sidebar()
+
+    def _delete_playlist(self, pl_id, pl_name):
+        """Delete a playlist after confirmation."""
+        reply = QMessageBox.question(
+            self, T('delete_playlist'),
+            f"{T('delete_playlist')}: {pl_name}?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No
+        )
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+        db.execute("DELETE FROM playlist_tracks WHERE playlist_id = ?",
+                   (pl_id,), commit=True)
+        db.execute("DELETE FROM playlists WHERE id = ?",
+                   (pl_id,), commit=True)
+        self._refresh_playlists_sidebar()
+        # If we were viewing this playlist, go back to all tracks
+        if self._current_view == f'playlist:{pl_id}':
+            self._load_view('all_tracks')
+
+    def _remove_tracks_from_playlist(self, track_ids):
+        """Remove selected tracks from the current playlist."""
+        if not self._current_view.startswith('playlist:'):
+            return
+        try:
+            pl_id = int(self._current_view.split(':')[1])
+        except (IndexError, ValueError):
+            return
+        for tid in track_ids:
+            db.execute(
+                "DELETE FROM playlist_tracks WHERE playlist_id = ? AND track_id = ?",
+                (pl_id, tid), commit=True
+            )
+        # Reload the playlist view
+        self._load_view(self._current_view)
+
+    def _on_tracks_dropped_to_playlist(self, playlist_id, track_ids):
+        """Handle tracks dropped onto a playlist in the sidebar."""
+        for tid in track_ids:
+            self._add_track_to_playlist(playlist_id, tid)
+        count = len(track_ids)
+        pl = db.fetchone("SELECT name FROM playlists WHERE id = ?", (playlist_id,))
+        name = pl['name'] if pl else '?'
+        lang = get_lang()
+        if lang == 'fr':
+            msg = f"{count} piste{'s' if count > 1 else ''} ajoutée{'s' if count > 1 else ''} à {name}"
+        else:
+            msg = f"{count} track{'s' if count > 1 else ''} added to {name}"
+        self._status_bar.showMessage(msg, 3000)
+        # Refresh if currently viewing that playlist
+        if self._current_view == f'playlist:{playlist_id}':
+            self._load_view(self._current_view)
 
     def _show_track_info(self, track):
         """Show track information dialog with classification."""
@@ -3611,11 +3792,15 @@ class HelpDialog(QDialog):
         backup on application exit. Backup rotation keeps 5 recent daily + 4 weekly. All database
         writes use SQLite WAL mode with thread-safe locking. Atomic saves prevent corruption.</p>
 
-        <h3>Cross-Platform</h3>
-        <p>Works on Windows, Linux, and macOS. Data is stored in the OS-appropriate
-        location (APPDATA / XDG_DATA_HOME / Library). Use <b>Tools → Relocate Paths</b>
-        when opening the same library on a different OS. Automatic path relocation on drive
-        letter changes.</p>
+        <h3>Cross-Platform &amp; Multi-PC</h3>
+        <p>Works on Windows, Linux, and macOS. Data is stored in the project directory
+        (portable — works from NAS, USB drive, or synced folder across multiple PCs).
+        At startup, MusicOthèque checks if scan folders are accessible and warns you
+        if paths need updating. Use <b>Tools → Relocate Music Paths</b> when opening
+        the library from a different OS or drive letter (e.g. P:/Music → /mnt/nas/Music).
+        Automatic path relocation on drive letter changes.</p>
+        <p>On first launch, if a previous library exists in %%APPDATA%%\\MusicOtheque (old location),
+        you will be offered to migrate it to the portable project directory.</p>
 
         <h3>Keyboard Shortcuts</h3>
         <table border="0" cellpadding="4">
@@ -3852,11 +4037,16 @@ class HelpDialog(QDialog):
         récentes + 4 hebdomadaires. Toutes les écritures utilisent SQLite WAL avec verrouillage
         thread-safe. Sauvegardes atomiques pour éviter la corruption.</p>
 
-        <h3>Multi-Plateforme</h3>
+        <h3>Multi-Plateforme &amp; Multi-PC</h3>
         <p>Fonctionne sur Windows, Linux et macOS. Les données sont stockées dans le
-        répertoire approprié au système (APPDATA / XDG_DATA_HOME / Library). Utilisez
-        <b>Outils → Déplacer les chemins</b> pour ouvrir la même bibliothèque sur un autre OS.
+        répertoire du projet (portable — fonctionne depuis un NAS, clé USB, ou dossier synchronisé
+        entre plusieurs PC). Au démarrage, MusicOthèque vérifie si les dossiers musicaux sont
+        accessibles et vous avertit si les chemins doivent être mis à jour. Utilisez
+        <b>Outils → Déplacer les chemins musicaux</b> pour adapter les chemins quand vous
+        changez d'OS ou de lettre de lecteur (ex. P:/Musique → /mnt/nas/Musique).
         Relocalisation automatique des chemins lors des changements de lettre de lecteur.</p>
+        <p>Au premier lancement, si une bibliothèque précédente existe dans %%APPDATA%%\\MusicOtheque
+        (ancien emplacement), il vous sera proposé de la migrer vers le répertoire portable.</p>
 
         <h3>Raccourcis Clavier</h3>
         <table border="0" cellpadding="4">

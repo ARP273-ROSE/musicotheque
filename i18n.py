@@ -506,6 +506,37 @@ TX = {
     # Classification enhanced
     'classify_done_detail': {'en': 'Classification complete: {count} tracks classified, {movements} movements detected',
                              'fr': 'Classification terminée : {count} pistes classifiées, {movements} courants détectés'},
+
+    # Migration / first launch / multi-PC robustness
+    'migrate_title': {'en': 'Previous Library Found', 'fr': 'Bibliothèque précédente trouvée'},
+    'migrate_message': {
+        'en': 'A MusicOthèque database was found at:\n{path}\n\n'
+              'It contains {tracks} tracks, {playlists} playlists.\n\n'
+              'Copy it here for portable multi-PC access?',
+        'fr': 'Une base MusicOthèque a été trouvée dans :\n{path}\n\n'
+              'Elle contient {tracks} pistes, {playlists} playlists.\n\n'
+              'La copier ici pour un accès portable multi-PC ?'},
+    'migrate_success': {'en': 'Library migrated successfully! {tracks} tracks imported.',
+                        'fr': 'Bibliothèque migrée avec succès ! {tracks} pistes importées.'},
+    'migrate_error': {'en': 'Migration failed: {error}', 'fr': 'Échec de la migration : {error}'},
+
+    'welcome_title': {'en': 'Welcome to MusicOthèque', 'fr': 'Bienvenue dans MusicOthèque'},
+    'welcome_message': {
+        'en': 'Your music library is empty.\n\n'
+              'Add a music folder to get started?\n'
+              '(You can also do this later from File > Add Music Folder)',
+        'fr': 'Votre bibliothèque musicale est vide.\n\n'
+              'Ajouter un dossier musical pour commencer ?\n'
+              '(Vous pouvez aussi le faire plus tard depuis Fichier > Ajouter un dossier)'},
+
+    'folders_check_title': {'en': 'Unreachable Music Folders', 'fr': 'Dossiers musicaux inaccessibles'},
+    'folders_check_message': {
+        'en': 'The following music folders are not accessible:\n\n{folders}\n\n'
+              'This may happen when launching from a different PC or OS.\n'
+              'Use Tools > Relocate Music Paths to update them.',
+        'fr': 'Les dossiers musicaux suivants sont inaccessibles :\n\n{folders}\n\n'
+              'Cela peut arriver en lançant depuis un autre PC ou OS.\n'
+              'Utilisez Outils > Déplacer les chemins musicaux pour les corriger.'},
 }
 
 
