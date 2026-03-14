@@ -30,7 +30,7 @@ exit /b 1
 :found_python
 
 REM === Venv local a chaque PC (pas dans le dossier NAS synchronise) ===
-set "VENV_DIR=%LOCALAPPDATA%\MusicOtheque\venv"
+set "VENV_DIR=%APPDATA%\MusicOtheque\venv"
 
 REM === Check if venv exists and works ===
 if not exist "%VENV_DIR%\Scripts\python.exe" goto :create_venv
@@ -43,7 +43,7 @@ if exist "%VENV_DIR%" (
     rmdir /s /q "%VENV_DIR%"
 )
 echo Creating virtual environment...
-if not exist "%LOCALAPPDATA%\MusicOtheque" mkdir "%LOCALAPPDATA%\MusicOtheque"
+if not exist "%APPDATA%\MusicOtheque" mkdir "%APPDATA%\MusicOtheque"
 %PYTHON% -m venv "%VENV_DIR%"
 if errorlevel 1 (
     echo.
