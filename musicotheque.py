@@ -15,7 +15,7 @@ from pathlib import Path
 # Force FFmpeg backend for QMediaPlayer (required for HLS streams like BBC Radio 3)
 os.environ.setdefault('QT_MEDIA_BACKEND', 'ffmpeg')
 
-VERSION = '3.3.0'
+VERSION = '3.3.1'
 APP_NAME = 'MusicOthèque'
 APP_DIR = Path(__file__).parent
 
@@ -64,6 +64,18 @@ def setup_logging():
         print(f"Warning: Could not create log file: {e}")
 
 
+def _anonymize_path(text):
+    """Replace user home directory with ~ for anonymous crash/bug reports."""
+    if not text:
+        return text
+    home = str(Path.home())
+    text = text.replace(home.replace("\\", "/"), "~")
+    text = text.replace(home, "~")
+    if sys.platform == "win32":
+        text = text.replace(home.lower(), "~")
+    return text
+
+
 def crash_handler(exc_type, exc_value, exc_tb):
     """Save crash report and show error dialog."""
     tb_text = ''.join(traceback.format_exception(exc_type, exc_value, exc_tb))
@@ -73,9 +85,9 @@ def crash_handler(exc_type, exc_value, exc_tb):
         'timestamp': time.strftime('%Y-%m-%d %H:%M:%S'),
         'version': VERSION,
         'python': platform.python_version(),
-        'os': f"{platform.system()} {platform.release()}",
+        'os': platform.system(),
         'arch': platform.machine(),
-        'traceback': tb_text,
+        'traceback': _anonymize_path(tb_text),
     }
 
     try:
@@ -300,7 +312,7 @@ def main():
     setup_logging()
     logging.info("Starting %s v%s", APP_NAME, VERSION)
     logging.info("Python %s on %s", platform.python_version(),
-                 f"{platform.system()} {platform.release()}")
+                 platform.system())
 
     # Install crash handler
     sys.excepthook = crash_handler

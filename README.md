@@ -12,13 +12,21 @@
 - **Automatic scanning** of music folders with metadata extraction (mutagen)
 - **21+ audio formats** supported: FLAC, MP3, OGG, Opus, M4A, AAC, WAV, AIFF, ALAC, APE, WavPack, DSD (DSF/DFF), MKA, TTA, SPX, MPC, WMA, and more
 - **Full-text search** (FTS5) across titles, artists, albums, genres, and composers
-- Browse by **Artists**, **Albums**, **Genres**, or **Playlists**
+- Browse by **Artists**, **Albums**, **Genres**, or **Playlists** (create, rename, delete)
 - **Cover art extraction** from embedded tags (ID3, FLAC pictures, MP4 covr)
 - **Audio quality indicators**: Hi-Res, CD Quality, Lossless, Lossy badges
 - **Unicode support**: Latin, Greek, Cyrillic, Arabic, Chinese, Japanese, Korean
 
+#### Playlist Management
+- **Create** new playlists from the sidebar context menu or when adding tracks
+- **Rename** and **delete** playlists via right-click on any playlist in the sidebar
+- **Drag & drop** tracks onto playlists in the sidebar to add them
+- Drop badge shows how many tracks are being added
+- **Remove tracks** from a playlist via right-click context menu (only when viewing a playlist)
+
 #### Drag & Drop
 - **Drag tracks** from the library to any folder on your desktop, Explorer, Finder, or Nautilus
+- **Drag tracks to playlists** in the sidebar to add them instantly
 - **Multi-selection** with Ctrl+click and Shift+click — drag multiple files at once
 - Cross-platform: works on Windows, macOS, and Linux file managers
 - Badge shows the number of files being dragged
@@ -137,9 +145,15 @@
 - Cross-platform: handles Windows→Linux path translation transparently
 - 3-minute poll interval, triggers background re-scan on changes
 
+#### NAS Multi-PC Portability
+- **Project-local data**: database, config, backups, and logs stored in the project directory (not APPDATA) — works from NAS, USB drive, or synced folder across multiple PCs
+- **Per-PC virtual environment**: venv created in `%LOCALAPPDATA%\MusicOtheque\venv` (Windows) or `$XDG_DATA_HOME/MusicOtheque/venv` (Linux) — never synced
+- **Portable launcher**: `launch.bat` (Windows) / `launch.sh` (Linux/macOS) — auto-detects Python, creates venv, installs deps
+- **Desktop shortcut helper**: auto-creates a portable shortcut targeting the launcher (not the Python binary)
+- **Migration**: on first launch, offers to migrate data from old APPDATA location to the project directory
+
 #### Cross-Platform
 - **Windows**, **Linux**, and **macOS** support
-- OS-appropriate data directories (APPDATA / XDG_DATA_HOME / Library)
 - **Path relocation** tool for migrated libraries (e.g., `J:/Music` → `/mnt/nas/Music`)
 - **Automatic path relocation** on drive letter changes (transparent, no user action)
 - Broken path detection and reporting
@@ -151,9 +165,11 @@
 - **Atomic saves** (write-tmp-then-rename)
 - **SQLite WAL mode** with thread-safe access
 - Export library to portable JSON
+- **Automatic crash reports**: saved locally as JSON on unhandled exceptions (anonymized — user paths replaced with `~`)
+- **Bug report template**: Help menu opens a pre-filled GitHub issue with system info, version, and last log entries (all anonymized)
 
 #### Bilingual Interface
-- Full **English / French** interface with 410+ translation keys
+- Full **English / French** interface with 450+ translation keys
 - Automatic system language detection
 - All tooltips, menus, dialogs, and help in both languages
 
@@ -256,14 +272,20 @@ python musicotheque.py
 | `audio_visualizer.py` | Real-time audio visualization (spectrum, VU meter, spectrogram) |
 | `library_watcher.py` | File system watcher with auto-relocation |
 | `file_organizer.py` | File organizer (Artist/Album/Track structure) |
+| `shortcut_helper.py` | Cross-platform desktop shortcut creation (Windows .lnk, Linux .desktop) |
+| `smart_library.py` | Standalone batch processor: scan, harmonize, classify, generate playlists |
 
 ### Data Location
 
-| OS | Path |
-|----|------|
-| Windows | `%APPDATA%\MusicOtheque\` |
-| Linux | `~/.local/share/MusicOtheque/` |
-| macOS | `~/Library/Application Support/MusicOtheque/` |
+All application data (database, config, backups, logs) is stored **in the project directory** — portable across PCs via NAS or synced folder.
+
+| Data | Location |
+|------|----------|
+| Database | `./musicotheque.db` (project directory) |
+| Backups | `./backups/` (project directory) |
+| Logs | `./musicotheque.log` (project directory) |
+| Virtual env | `%LOCALAPPDATA%\MusicOtheque\venv` (Windows) |
+| Virtual env | `$XDG_DATA_HOME/MusicOtheque/venv` (Linux/macOS) |
 
 ---
 

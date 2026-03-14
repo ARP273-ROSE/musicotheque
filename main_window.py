@@ -2725,9 +2725,40 @@ class MainWindow(QMainWindow):
         dlg.exec()
 
     def _on_report_bug(self):
-        """Open GitHub issues page."""
+        """Open GitHub issues page with pre-filled anonymous template."""
         import webbrowser
-        webbrowser.open('https://github.com/ARP273-ROSE/musicotheque/issues/new')
+        from urllib.parse import quote
+        from musicotheque import VERSION, LOG_PATH, _anonymize_path
+
+        # Collect last errors from log (anonymized)
+        last_errors = ""
+        try:
+            if LOG_PATH.exists():
+                lines = LOG_PATH.read_text(encoding='utf-8', errors='replace').splitlines()
+                # Last 30 lines max
+                snippet = '\n'.join(lines[-30:])
+                last_errors = _anonymize_path(snippet)
+        except Exception:
+            last_errors = "Could not read log file."
+
+        err_section = last_errors[:1500] if last_errors else "No recent errors."
+
+        env_info = (
+            f"- App version: {VERSION}\n"
+            f"- OS: {platform.system()} ({platform.machine()})\n"
+            f"- Python: {sys.version.split()[0]}\n"
+        )
+
+        title = quote(f"[Bug] v{VERSION} - ")
+        body = quote(
+            f"## Environment\n{env_info}\n"
+            f"## Description\n<!-- {T('bug_describe')} -->\n\n"
+            f"## Steps to reproduce\n1. \n2. \n3. \n\n"
+            f"## Recent errors (anonymized)\n```\n{err_section}\n```\n"
+        )
+        webbrowser.open(
+            f'https://github.com/ARP273-ROSE/musicotheque/issues/new?title={title}&body={body}'
+        )
 
     def _on_create_shortcut(self):
         """Create desktop shortcut."""
@@ -3616,9 +3647,21 @@ class HelpDialog(QDialog):
         Context menu adapts to selection: batch add to queue/playlist, batch metadata editing,
         batch play count reset.</p>
 
+        <h3>Playlist Management</h3>
+        <p>Create, rename, and delete playlists from the sidebar:</p>
+        <ul>
+        <li><b>Create</b> — Right-click the "Playlists" header → New Playlist, or add a track
+        to a new playlist via context menu</li>
+        <li><b>Rename / Delete</b> — Right-click any playlist in the sidebar</li>
+        <li><b>Drag &amp; drop</b> — Drag tracks from the library onto a playlist in the sidebar
+        to add them instantly. A badge shows how many tracks are being added.</li>
+        <li><b>Remove tracks</b> — Right-click a track while viewing a playlist to remove it</li>
+        </ul>
+
         <h3>Drag &amp; Drop</h3>
         <p>Select one or more tracks, then drag them to any folder on your desktop
         or file manager (Explorer, Finder, Nautilus) to <b>copy the audio files</b>.
+        You can also drag tracks onto playlists in the sidebar to add them.
         A badge shows the number of files being dragged. Works on Windows, macOS, and Linux.</p>
 
         <h3>Metadata Editing</h3>
@@ -3798,6 +3841,16 @@ class HelpDialog(QDialog):
         backup on application exit. Backup rotation keeps 5 recent daily + 4 weekly. All database
         writes use SQLite WAL mode with thread-safe locking. Atomic saves prevent corruption.</p>
 
+        <h3>Bug Reports &amp; Crash Handling</h3>
+        <ul>
+        <li><b>Automatic crash reports</b> — If MusicOthèque crashes, a report is saved locally
+        (JSON file with traceback, version, OS). All user paths are anonymized (replaced with ~).
+        On next startup, you are offered to view the crash report.</li>
+        <li><b>Report a Bug</b> (Help menu) — Opens a pre-filled GitHub issue template with
+        your system info (version, OS, Python version) and the last log entries. All data is
+        anonymized before sending — no personal paths or usernames are included.</li>
+        </ul>
+
         <h3>Cross-Platform &amp; Multi-PC</h3>
         <p>Works on Windows, Linux, and macOS. Data is stored in the project directory
         (portable — works from NAS, USB drive, or synced folder across multiple PCs).
@@ -3854,9 +3907,23 @@ class HelpDialog(QDialog):
         Le menu contextuel s'adapte : ajout groupé en file/playlist, édition groupée des métadonnées,
         réinitialisation groupée des compteurs.</p>
 
+        <h3>Gestion des Playlists</h3>
+        <p>Créer, renommer et supprimer des playlists depuis la barre latérale :</p>
+        <ul>
+        <li><b>Créer</b> — Clic droit sur l'en-tête « Playlists » → Nouvelle playlist, ou ajouter
+        une piste à une nouvelle playlist via le menu contextuel</li>
+        <li><b>Renommer / Supprimer</b> — Clic droit sur une playlist dans la barre latérale</li>
+        <li><b>Glisser-déposer</b> — Glissez des pistes depuis la bibliothèque vers une playlist
+        dans la barre latérale pour les ajouter instantanément. Un badge indique le nombre de
+        pistes ajoutées.</li>
+        <li><b>Retirer des pistes</b> — Clic droit sur une piste en visualisant une playlist
+        pour la retirer</li>
+        </ul>
+
         <h3>Glisser-Déposer</h3>
         <p>Sélectionnez une ou plusieurs pistes, puis glissez-les vers un dossier sur votre bureau
         ou gestionnaire de fichiers (Explorateur, Finder, Nautilus) pour <b>copier les fichiers audio</b>.
+        Vous pouvez aussi glisser des pistes vers les playlists dans la barre latérale pour les ajouter.
         Un badge affiche le nombre de fichiers glissés. Fonctionne sur Windows, macOS et Linux.</p>
 
         <h3>Édition des Métadonnées</h3>
@@ -4042,6 +4109,18 @@ class HelpDialog(QDialog):
         Sauvegarde supplémentaire à la fermeture. La rotation garde 5 sauvegardes quotidiennes
         récentes + 4 hebdomadaires. Toutes les écritures utilisent SQLite WAL avec verrouillage
         thread-safe. Sauvegardes atomiques pour éviter la corruption.</p>
+
+        <h3>Rapports de Bugs &amp; Gestion des Crashs</h3>
+        <ul>
+        <li><b>Rapports de crash automatiques</b> — Si MusicOthèque plante, un rapport est
+        sauvegardé localement (fichier JSON avec traceback, version, OS). Tous les chemins
+        utilisateur sont anonymisés (remplacés par ~). Au prochain démarrage, il vous est
+        proposé de consulter le rapport.</li>
+        <li><b>Signaler un bug</b> (menu Aide) — Ouvre un modèle de ticket GitHub pré-rempli
+        avec vos informations système (version, OS, version Python) et les dernières entrées
+        du journal. Toutes les données sont anonymisées avant envoi — aucun chemin personnel
+        ni nom d'utilisateur n'est inclus.</li>
+        </ul>
 
         <h3>Multi-Plateforme &amp; Multi-PC</h3>
         <p>Fonctionne sur Windows, Linux et macOS. Les données sont stockées dans le
